@@ -38,7 +38,7 @@ pub fn write_worksheet(
 
 /// The head of a worksheet part as a string, for the streaming writer.
 ///
-/// A thin wrapper over [`write_worksheet_head`]. The head is bounded by the sheet's
+/// A thin wrapper over `write_worksheet_head`. The head is bounded by the sheet's
 /// configuration rather than by its cell count, so buffering it costs nothing that matters.
 pub fn write_worksheet_head_to_string(
     worksheet: &Worksheet,
