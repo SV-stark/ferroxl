@@ -104,7 +104,6 @@ jobs:
 
       # A binary that does not print its version is not a release. This also catches a
       # target/architecture mismatch, which otherwise shows up as a mystery crash report.
-      # A binary that does not print its version is not a release.
       - name: Smoke test the binary
         if: ${{ !matrix.machine }}
         shell: bash
