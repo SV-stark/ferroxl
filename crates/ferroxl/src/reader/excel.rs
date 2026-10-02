@@ -219,6 +219,13 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
 
     // Resolve which archive parts hold which worksheet.
     let sheets = detect_parts(&mut archive, &names)?;
+
+    // Everything the writer will not produce itself, captured before the archive is closed.
+    // Without this a pivot table, a slicer or an ActiveX control is not preserved, it is
+    // deleted -- and nothing about the saved file says so.
+    let worksheet_paths: Vec<String> = sheets.iter().map(|sheet| sheet.path.clone()).collect();
+    workbook.preserved = crate::reader::preserved::capture(bytes, &worksheet_paths);
+
     let context = CellContext {
         base_date: workbook.properties.excel_base_date,
         guess_types: options.guess_types,

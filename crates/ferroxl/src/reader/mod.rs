@@ -7,6 +7,7 @@
 pub mod archive;
 pub mod comments;
 pub mod excel;
+pub mod preserved;
 pub mod strings;
 pub mod style;
 pub mod workbook;
