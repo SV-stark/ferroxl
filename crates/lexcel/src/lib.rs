@@ -116,8 +116,9 @@ mod tests {
 
     #[test]
     fn version_is_exposed() {
-        assert!(!VERSION.is_empty());
-        assert!(VERSION.starts_with('1'));
+        // Compared against the manifest rather than a literal, so bumping the version does
+        // not leave a test asserting a major that is two releases out of date.
+        assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
         assert_eq!(UPSTREAM_PROJECT, "openpyxl");
         assert_eq!(MCP_SERVER, "lexcel-mcp");
     }

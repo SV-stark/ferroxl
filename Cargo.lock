@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "lexcel"
-version = "1.9.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "png",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "lexcel-mcp"
-version = "1.9.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "lexcel",

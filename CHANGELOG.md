@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.9.0] — 2026-10-02
+## [0.1.0] — 2026-10-02
 
 The first release. lexcel is a Rust port of openpyxl 1.9.0: the same modules, the same
 classes, the same behaviour, including the parts that are surprising.
@@ -108,4 +108,4 @@ Each of these is documented at the call site as well as in the README.
 - Files written by lexcel are opened with openpyxl 3.x and the values, styles, merges,
   validations, comments, defined names and freeze panes compared.
 
-[1.9.0]: https://github.com/SV-stark/lexcel/releases/tag/v1.9.0
+[0.1.0]: https://github.com/SV-stark/lexcel/releases/tag/v0.1.0

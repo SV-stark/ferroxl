@@ -39,7 +39,7 @@ lexcel is not on crates.io yet, so depend on the git tag:
 
 ```toml
 [dependencies]
-lexcel = { git = "https://github.com/SV-stark/lexcel", tag = "v1.9.0" }
+lexcel = { git = "https://github.com/SV-stark/lexcel", tag = "v0.1.0" }
 ```
 
 Or work from a checkout, which is what you want if you want to change it:
@@ -105,7 +105,7 @@ read and edit workbooks instead of guessing at them.
 
 ```console
 $ cargo run -p lexcel-mcp -- --root ./spreadsheets
-lexcel-mcp 1.9.0 — a Model Context Protocol server for Excel workbooks
+lexcel-mcp 0.1.0 — a Model Context Protocol server for Excel workbooks
 
 USAGE:
     lexcel-mcp [--root <directory>]
@@ -432,7 +432,7 @@ Two workflows under `.github/workflows`.
 The dependency cache is shared across the matrix, so the first job to finish warms it for
 the rest.
 
-**`release.yml`** runs when a tag of the form `v1.9.0` is pushed. It builds `lexcel-mcp`
+**`release.yml`** runs when a tag of the form `v0.1.0` is pushed. It builds `lexcel-mcp`
 for five targets:
 
 | Target | Archive |
@@ -451,7 +451,7 @@ files are combined into one `SHA256SUMS` and verified before anything is publish
 release is drafted first and only published once the file count matches the matrix.
 
 ```console
-$ git tag v1.9.0 && git push origin v1.9.0
+$ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 ## License
