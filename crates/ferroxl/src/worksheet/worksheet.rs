@@ -454,6 +454,96 @@ impl Worksheet {
         Ok(rows)
     }
 
+    /// Every row of the sheet's used range, row by row, left to right.
+    ///
+    /// The row-major counterpart of [`cells`](Self::cells), and what most callers want
+    /// first: openpyxl calls this `ws.iter_rows()` and almost every script that reads a
+    /// workbook is a loop over it.
+    ///
+    /// Rows come back as whole rows even where the sheet is sparse, so the outer and inner
+    /// iterators always line up — a row that is entirely empty is a row of `None` rather
+    /// than a row missing from the output. Skipping blanks is a filter, and leaving it to
+    /// the caller means the shape of the result is never in question.
+    pub fn iter_rows(&self) -> Vec<Vec<Option<&Cell>>> {
+        let (min_col, min_row, max_col, max_row) = self.used_bounds();
+        self.iter_rows_within(min_row, max_row, min_col, max_col)
+    }
+
+    /// Rows from `min_row` to `max_row`, inclusive, and `min_col` to `max_col`, inclusive.
+    ///
+    /// The bounds are inclusive on both ends, which is how a caller thinks about `A1:B5`
+    /// and is also what openpyxl's keyword arguments mean. That differs from
+    /// [`RangeBounds`](crate::worksheet::iter_worksheet::RangeBounds), whose `max_col` is
+    /// exclusive because it comes out of a range string.
+    pub fn iter_rows_within(
+        &self,
+        min_row: u32,
+        max_row: u32,
+        min_col: u32,
+        max_col: u32,
+    ) -> Vec<Vec<Option<&Cell>>> {
+        (min_row..=max_row)
+            .map(|row| {
+                (min_col..=max_col)
+                    .map(|column| self.get_cell_by_index(column, row))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Every column of the sheet's used range, column by column, top to bottom.
+    ///
+    /// Column-major iteration. The transpose of [`iter_rows`](Self::iter_rows), and the one
+    /// that reads a time series down a column or a record across a header row.
+    ///
+    /// A whole column of a million-row sheet is a million cells in one vector, which is
+    /// larger than the row-major form's working set. That is inherent to the shape rather
+    /// than to this implementation, and it is why both are collected rather than streamed:
+    /// the borrow of `self` outlives them, so a lazy iterator would need a lifetime the
+    /// signature cannot express without a closure-based `for_each`.
+    pub fn iter_cols(&self) -> Vec<Vec<Option<&Cell>>> {
+        let (min_col, min_row, max_col, max_row) = self.used_bounds();
+        self.iter_cols_within(min_col, max_col, min_row, max_row)
+    }
+
+    /// Columns from `min_col` to `max_col`, inclusive, each `min_row` to `max_row`,
+    /// inclusive.
+    pub fn iter_cols_within(
+        &self,
+        min_col: u32,
+        max_col: u32,
+        min_row: u32,
+        max_row: u32,
+    ) -> Vec<Vec<Option<&Cell>>> {
+        (min_col..=max_col)
+            .map(|column| {
+                (min_row..=max_row)
+                    .map(|row| self.get_cell_by_index(column, row))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The sheet's used range as inclusive `(min_col, min_row, max_col, max_row)`.
+    ///
+    /// An empty sheet is `1, 1, 1, 1`, which yields exactly one empty cell rather than
+    /// nothing. That is the same shape a sheet with one blank cell has, which is the right
+    /// ambiguity: a caller iterating an empty sheet should not have to special-case it.
+    fn used_bounds(&self) -> (u32, u32, u32, u32) {
+        (
+            1,
+            1,
+            self.highest_column().max(1),
+            self.highest_row().max(1),
+        )
+    }
+
+    /// The cell at a 1-based column and row, or `None` if it is empty.
+    fn get_cell_by_index(&self, column: u32, row: u32) -> Option<&Cell> {
+        let letters = get_column_letter(column).ok()?;
+        self.get_cell(&format!("{letters}{row}"))
+    }
+
     /// Write a row of values starting at `start_column` on `row`.
     pub fn write_row(&mut self, row: u32, start_column: u32, values: &[CellValue]) -> Result<()> {
         for (offset, value) in values.iter().enumerate() {
@@ -746,6 +836,94 @@ impl std::fmt::Display for Worksheet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<Worksheet \"{}\">", self.title)
     }
+}
+
+#[test]
+fn rows_come_back_left_to_right() {
+    let mut ws = Worksheet::new("S").expect("title");
+    ws.set("A1", 1).expect("A1");
+    ws.set("C1", 3).expect("C1");
+    ws.set("A2", 4).expect("A2");
+
+    let rows = ws.iter_rows();
+    // B1 is empty but still occupies its place, so the rows line up with the columns.
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].len(), 3);
+    assert_eq!(
+        rows[0][0].map(|c| c.internal_value().clone()),
+        Some(CellValue::Number(1.0))
+    );
+    assert!(rows[0][1].is_none(), "B1 is empty but present");
+    assert_eq!(
+        rows[0][2].map(|c| c.internal_value().clone()),
+        Some(CellValue::Number(3.0))
+    );
+    assert_eq!(
+        rows[1][0].map(|c| c.internal_value().clone()),
+        Some(CellValue::Number(4.0))
+    );
+}
+
+#[test]
+fn columns_come_back_top_to_bottom() {
+    let mut ws = Worksheet::new("S").expect("title");
+    ws.set("A1", 1).expect("A1");
+    ws.set("A3", 3).expect("A3");
+    ws.set("B1", 4).expect("B1");
+
+    let cols = ws.iter_cols();
+    assert_eq!(cols.len(), 2);
+    assert_eq!(cols[0].len(), 3);
+    assert_eq!(
+        cols[0][0].map(|c| c.internal_value().clone()),
+        Some(CellValue::Number(1.0))
+    );
+    assert!(cols[0][1].is_none(), "A2 is empty but present");
+    assert_eq!(
+        cols[0][2].map(|c| c.internal_value().clone()),
+        Some(CellValue::Number(3.0))
+    );
+}
+
+#[test]
+fn rows_and_columns_are_transposes_of_each_other() {
+    let mut ws = Worksheet::new("S").expect("title");
+    for (coordinate, value) in [("A1", 1), ("B1", 2), ("A2", 3), ("B2", 4)] {
+        ws.set(coordinate, value).expect("set");
+    }
+    let rows = ws.iter_rows();
+    let cols = ws.iter_cols();
+    for (r, row) in rows.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            let value = cell.map(|c| c.internal_value().clone());
+            assert_eq!(
+                value,
+                cols[c][r].map(|c| c.internal_value().clone()),
+                "row {r} column {c} disagrees with its transpose"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_empty_sheet_yields_one_empty_row() {
+    let ws = Worksheet::new("S").expect("title");
+    let rows = ws.iter_rows();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].len(), 1);
+    assert!(rows[0][0].is_none());
+}
+
+#[test]
+fn the_bounds_are_inclusive_at_both_ends() {
+    // A1:B5 is five rows of two columns. An exclusive upper bound here would silently
+    // drop row 5 and column B, which is the sort of off-by-one that reads as data loss.
+    let mut ws = Worksheet::new("S").expect("title");
+    ws.set("B5", 1).expect("B5");
+    let rows = ws.iter_rows_within(1, 5, 1, 2);
+    assert_eq!(rows.len(), 5);
+    assert!(rows.iter().all(|row| row.len() == 2));
+    assert!(rows[4][1].is_some(), "B5 is inside the bounds");
 }
 
 #[cfg(test)]
