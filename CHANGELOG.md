@@ -5,10 +5,24 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] - 2026-10-02
+## [0.1.7] - 2026-10-02
+
+Everything since 0.1.6. Four features, and two of them fix failures that were silent: a
+worksheet that disappeared from a workbook with no error, and a `<pivotCaches>` element dropped
+on the way out. Both were invisible to `tools/parity.py`, which matches names and cannot see
+either.
 
 ### Added
 
+- **Pass-through preservation, so a round trip stops being destructive.** `Workbook::preserved`
+  holds every part, content type, relationship and `<workbook>`/`<worksheet>` child the writer
+  does not produce, and the writer writes them back. Copying the bytes is only the easy half: a
+  part nobody can reach is inert, so the *relationship* is preserved too, its id remapped when
+  the writer has already used it, and the `r:id` in the referencing element rewritten to match.
+  Without that a pivot table survives on disk with nothing pointing at it -- a file that opens,
+  shows the right cells, and has quietly lost the table.
+  What still does not survive is recorded in the module docs rather than left to be discovered:
+  unknown *attributes*, content inside `<sheetData>`, and byte-identical zip entries.
 - **`reader::archive`** rebuilds a zip whose end-of-central-directory record was cut off, which
   is what an interrupted download leaves behind. The central directory is written before that
   record, so the archive is usually recoverable: the directory is walked for its entry count,
@@ -63,6 +77,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The silent-loss batch: everything here was read as absent or written from a literal, so a
 workbook using it loaded wrong and saved wrong without saying so.
+
+## [0.1.6] - 2026-10-02
 
 ### Fixed
 

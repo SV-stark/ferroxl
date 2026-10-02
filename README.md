@@ -16,6 +16,12 @@ differs, and what is not there at all. The largest absences are pivot tables, ch
 sheets, and rich text. Named styles are done: all 49 of Excel's built-ins plus the workbook's
 own, with `cell.style` reading back a name again.
 
+Loading and re-saving no longer deletes what it does not model. Parts ferroxl has no API for --
+pivot tables and their caches, slicers, query tables, threaded comments, ActiveX controls,
+`customXml` -- are carried through with the content types and relationships that make them
+reachable, so an enterprise template survives being opened and saved. It does not make those
+features editable; `PARITY.md` lists exactly what that does and does not cover.
+
 `PARITY.md` is measured by `tools/parity.py` against a real checkout of the Python, not
 written from memory. It also says what the audit *cannot* see: the tool matches names, so a
 function that behaves wrongly and an XML element that is silently dropped both read as

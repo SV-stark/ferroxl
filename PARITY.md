@@ -43,7 +43,7 @@ gap by a wide margin; the numbers here are from a run against 3.1.5.
 | --- | --- |
 | openpyxl top-level names audited | 994 |
 | Modules whose every public name is matched | 32 of 183 |
-| Names with no ferroxl counterpart | 679 |
+| Names with no ferroxl counterpart | 678 |
 
 The count fell from 729 to 679 without 50 features being written. `styles/builtins.py`
 exposes 51 module-level string literals, and openpyxl names them after their *variables*
@@ -60,20 +60,21 @@ Unmatched names, by upstream package:
 | --- | --- | --- |
 | `drawing/` | 126 | Shape geometry and the `spPr` tree; ferroxl has image sizing only |
 | `worksheet/` | 117 | Views, filters, OLE, scenarios, print ranges, array formulas |
-| `styles/` | 100 | Named styles, `StyleArray`, table styles, dxf extras |
 | `chart/` | 81 | Data labels, trendlines, layouts, rich-text titles, the chart reader |
 | `pivot/` | 58 | The whole pivot table and pivot cache model |
-| `descriptors/` | 49 | The `Serialisable` base and the typed descriptor system |
+| `styles/` | 50 | `StyleArray`, table styles, dxf extras. Named styles and the 49 built-ins shipped in 0.1.7 |
+| `descriptors/` | 48 | The `Serialisable` base and the typed descriptor system |
 | `xml/` | 41 | Namespace registration, `iterparse`, tag constants |
 | `utils/` | 35 | `FORMULAE`, escaping, `IndexedList`, dataframe bridge, open-ended ranges |
-| `workbook/` | 35 | Calculation properties, book views, external links, file sharing, web options |
 | `packaging/` | 34 | Manifest, relationship and content-type construction |
+| `workbook/` | 34 | Book views, external links, file sharing, web options. `calcPr` shipped in 0.1.6 |
 | `cell/` | 24 | Rich text, phonetic text, inline fonts |
 | `chartsheet/` | 11 | Sheets whose only content is a chart |
-| `formatting/` | 7 | Data bars, icon-set rules, `cfvo/@gte`, `Rule/@timePeriod` |
+| `formatting/` | 6 | Down from 7: `cfvo/@gte` and `Rule/@timePeriod` are now read and written |
 | `comments/` | 5 | Comment shape and sizing details |
 | `reader/` | 5 | `SharedStrings`, `ExcelReader`, rich-text reading |
-| `formula/` | 3 | The tokenizer and `FORMULAE` — `Translator` **is** ported |
+| `formula/` | 2 | `FORMULAE`. `Translator` **is** ported, and so is the evaluator |
+| **Total** | **678** | |
 
 Three further gaps are *method-level* and do not appear in a top-level-name audit:
 [`Worksheet::range()` with offsets](#2-worksheet-range-with-offsets-rows-and-columns),
@@ -81,10 +82,43 @@ Three further gaps are *method-level* and do not appear in a top-level-name audi
 [charts not read back](#6-charts-and-images-are-written-but-not-read-back).
 
 The honest summary of where ferroxl stands: **cell values, styles, and the read/write round
-trip are solid; everything around the cell is thin.** A workbook with pivot tables, named
-styles, gradient fills, rich text or chart-only sheets in it will lose those parts on save.
-That is not a rounding error against "feature parity" — it is a materially different library
+trip are solid; everything around the cell is thin.** That last half improved in 0.1.7 -- named
+styles, gradient fills, data bars, formula evaluation, and pass-through preservation all landed
+-- but a workbook with a pivot table, rich text or a chart-only sheet in it still loses the
+*editing* of that content even where the bytes survive. Preserving a pivot table keeps it in the
+file; it does not make `ferroxl` able to change one.
+
+That is not a rounding error against "feature parity" - it is a materially different library
 from openpyxl, and this document exists to say so precisely rather than approximately.
+
+## Pass-through preservation
+
+**Shipped in 0.1.7, with limits that matter more than the feature.**
+
+Loading and re-saving used to delete every part ferroxl did not model: pivot tables and their
+caches, slicers, query tables, connections, threaded comments, ActiveX controls, `customXml`.
+`Workbook::preserved` now holds them, with the content types and relationships that make them
+reachable, and the writer puts them back.
+
+The part that is easy to get wrong is reachability. A preserved part that nothing points at is
+inert data: the file opens, shows the right cells, and has quietly lost the pivot table. So the
+relationship travels too, its id is remapped where the writer has already used it, and the
+`r:id` in the referencing element is rewritten to match.
+
+What still does not survive, recorded here rather than left to be found:
+
+- **Unknown attributes** on `<worksheet>`, `<sheetPr>` and their neighbours. Children carry
+  over; attributes do not.
+- **Content inside `<sheetData>`** is rebuilt from the cell model, so a shared formula's master
+  cell is not preserved.
+- **Byte-identical zip entries.** The bytes are re-compressed, so an entry is
+  content-identical, not byte-identical.
+- **Editing.** A preserved pivot table or slicer can be carried through but not changed.
+
+Two bugs in this feature passed the unit tests and were caught only by the end-to-end one:
+the reader skipped the *writer's own* `.rels` parts and so never captured their relationships,
+and `append_children` searched for a literal `</workbook>` when `write_workbook` closes as
+`</ns0:workbook>`. Both dropped content without a word.
 
 ## Implemented
 
@@ -319,41 +353,40 @@ dimension correctly, so the divergence only shows on a hand-edited or corrupt fi
 `highest_row` and `highest_column` come from the dimension tables rather than the stored
 element, so they move with the cells.
 
-### Formula evaluation
+### 4a. ~~Formula evaluation~~ - shipped in 0.1.7, as a subset
 
-`openpyxl` has no formula engine and neither does ferroxl, in the sense that matters: neither
-computes a value the way Excel does when you save. What ferroxl now has is
-`Workbook::recalculate`, which evaluates a subset and writes the result into `<v>` so that a
-reader which is not Excel sees a number instead of a blank.
+**Shipped in 0.1.7, as a subset on purpose.** `Workbook::recalculate` evaluates the operators,
+the aggregates, `IF`/`IFERROR`, `AND`/`OR`/`NOT` and the common text functions, and writes the
+result into `<v>` so a reader that is not Excel sees a number rather than a blank.
 
-The differences from a full engine are the point rather than a gap to be apologised for:
+The boundaries are the design, not gaps to apologise for. A formula it cannot evaluate gets **no**
+value and is listed in `Recalculation::unresolved` with a reason -- `VLOOKUP`, `XLOOKUP`,
+`INDEX` and `MATCH` are absent rather than approximated, because each is a day of edge cases
+and a place to be subtly wrong. `calcPr/@fullCalcOnLoad` is set, so Excel recomputes on open and
+a value the engine got wrong cannot survive a human opening the file. Formulas are evaluated in
+one pass, so a formula reading another formula's cell sees it as blank: visible, not wrong.
 
-- A formula it cannot evaluate gets **no** value and is listed in `Recalculation::unresolved`
-  with a reason. `VLOOKUP` is not approximated.
-- Formulas are evaluated in one pass, so a formula reading another formula's cell sees it as
-  blank rather than as its stale value. `Worksheet::trace_precedents` gives the order to fix
-  this properly.
-- `calcPr/@fullCalcOnLoad` is set, so Excel recomputes on open and a wrong value here cannot
-  survive a human opening and saving the file.
+### 5. ~~Zip central directory repair~~ - resolved in 0.1.7
 
-### 5. Zip central directory repair
+**This entry was wrong, and measuring it is what found a real gap next door.**
 
-**Resolved.** This entry was wrong in both directions, and measuring it is what showed that.
+It described openpyxl scanning for the end-of-central-directory signature to tolerate appended
+junk, and ferroxl rejecting such files. ferroxl never needed that: the zip crate locates the
+record by scanning backwards, so a 4 kB tail of zeroes, a stray `<html>404</html>`, and even a
+*prepended* UTF-8 BOM all load. The entry described a bug that did not exist.
 
-The gap was described as openpyxl scanning for the end-of-central-directory signature to
-tolerate junk appended after it. ferroxl never needed that: the zip crate locates the record by
-scanning backwards, so a 4 kB tail of zeroes, a stray `<html>404</html>`, and even a *prepended*
-UTF-8 BOM all load. There was never a defect here, and the entry described a bug that did not
-exist.
+What was missing is the neighbouring case -- a record *truncated*, which is what an interrupted
+download leaves. `reader::archive` walks the central directory and rebuilds the missing 22
+bytes; `crates/ferroxl/tests/archive_check.rs` covers it end to end. A file truncated *into* the
+central directory is still refused, because no record can describe it and a wrong one yields a
+file that opens and shows the wrong sheets.
 
-What was actually missing was the neighbouring case: an end-of-central-directory record cut off
-by an interrupted download. The central directory is written before that record, so such a file
-is reconstructible, and `reader::archive` now walks the directory and rebuilds the missing 22
-bytes. `crates/ferroxl/tests/archive_check.rs` covers it end to end.
+### 5a. Relationship targets are resolved rather than assumed - fixed in 0.1.7
 
-**Effect.** A workbook whose trailing record was truncated now loads, cells and all. A file
-truncated *into* the central directory is still refused, because no record can describe it, and
-a wrong one would produce a file that opens and shows the wrong sheets.
+`detect_worksheets` built the part name by prefixing `xl/` onto the relationship target, so a
+generator writing `Target="/xl/worksheets/sheet1.xml"` produced `xl//xl/worksheets/sheet1.xml`.
+That matched no content type, the sheet was dropped, and the workbook opened **empty** -- no
+exception, no warning. `resolve_part` now resolves the target properly.
 
 ### 6. Charts and images are written but not read back
 
