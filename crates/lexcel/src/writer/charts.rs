@@ -783,13 +783,9 @@ mod tests {
     fn unresolved_references_have_zero_points() {
         let mut chart = BarChart::new();
         // A reference whose values were never resolved.
-        chart.add_series(Series::new(Reference::new(
-            "Sheet1",
-            (0, 0),
-            None,
-            None,
-            None,
-        ).unwrap()));
+        chart.add_series(Series::new(
+            Reference::new("Sheet1", (0, 0), None, None, None).unwrap(),
+        ));
         let xml = write_bar_chart(&chart);
         let root = fromstring(xml.as_bytes()).unwrap();
         let plot_area = root

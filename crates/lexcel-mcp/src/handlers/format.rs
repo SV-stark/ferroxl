@@ -5,9 +5,9 @@ use lexcel::datavalidation::{
     DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
 };
 use lexcel::formatting::rules::{CellIsRule, ColorScaleRule, FormulaRule, Rule};
-use lexcel::Color;
 use lexcel::styles::{Border, Borders, Fill, Font, Style};
 use lexcel::worksheet::{ColumnDimension, RowDimension};
+use lexcel::Color;
 use serde_json::{json, Value};
 
 use super::{check_colour, err, open_for_edit, Handled};
@@ -38,7 +38,10 @@ pub fn set_column_width(workspace: &Workspace, args: &Args) -> Handled {
     let name = workbook.worksheets[index].title().to_string();
     workspace.save(workbook, &path)?;
     let summary = format!("set {columns} on {name} to width {width}");
-    Ok((summary, json!({ "path": path, "sheet": name, "columns": letters, "width": width })))
+    Ok((
+        summary,
+        json!({ "path": path, "sheet": name, "columns": letters, "width": width }),
+    ))
 }
 
 /// Set the height of one row or a span of rows.
@@ -65,7 +68,10 @@ pub fn set_row_height(workspace: &Workspace, args: &Args) -> Handled {
     let name = workbook.worksheets[index].title().to_string();
     workspace.save(workbook, &path)?;
     let summary = format!("set rows {rows} on {name} to height {height}pt");
-    Ok((summary, json!({ "path": path, "sheet": name, "rows": numbers, "height": height })))
+    Ok((
+        summary,
+        json!({ "path": path, "sheet": name, "rows": numbers, "height": height }),
+    ))
 }
 
 /// Set the printed header and footer.
@@ -86,7 +92,11 @@ pub fn set_header_footer(workspace: &Workspace, args: &Args) -> Handled {
                 continue;
             };
             applied += 1;
-            let section = section_mut(&mut workbook.worksheets[index].header_footer, position, header);
+            let section = section_mut(
+                &mut workbook.worksheets[index].header_footer,
+                position,
+                header,
+            );
             section.text = if text.is_empty() { None } else { Some(text) };
         }
     }
@@ -128,7 +138,8 @@ pub fn add_hyperlink(workspace: &Workspace, args: &Args) -> Handled {
     let (mut workbook, index) = open_for_edit(workspace, args)?;
     if workbook.worksheets[index].cell_value(&cell).is_none() {
         workbook.worksheets[index]
-            .set(&cell, lexcel::CellValue::text(display.clone())).map_err(err)?;
+            .set(&cell, lexcel::CellValue::text(display.clone()))
+            .map_err(err)?;
     }
     let relationship = workbook.worksheets[index]
         .set_hyperlink(&cell, &target)
@@ -246,9 +257,10 @@ pub fn add_data_validation(workspace: &Workspace, args: &Args) -> Handled {
     if let Some(message) = args.opt_str("prompt_message") {
         validation.set_prompt_message(&message, "Enter a value");
     }
-    validation
-        .attr_map
-        .insert("errorStyle".to_string(), ValidationErrorStyle::Stop.as_str().to_string());
+    validation.attr_map.insert(
+        "errorStyle".to_string(),
+        ValidationErrorStyle::Stop.as_str().to_string(),
+    );
     validation.ranges = vec![range.clone()];
     let (mut workbook, index) = open_for_edit(workspace, args)?;
     let count = workbook.worksheets[index].data_validations.len();
@@ -275,7 +287,10 @@ pub fn add_conditional_format(workspace: &Workspace, args: &Args) -> Handled {
     let kind = args.require_str("kind")?;
     let rule = build_rule(&kind, args)?;
     let (mut workbook, index) = open_for_edit(workspace, args)?;
-    let priority = workbook.worksheets[index].conditional_formatting.max_priority + 1;
+    let priority = workbook.worksheets[index]
+        .conditional_formatting
+        .max_priority
+        + 1;
     let mut rule = rule;
     rule = rule.with_priority(priority);
     workbook.worksheets[index]
@@ -421,9 +436,7 @@ fn apply_style(style: &mut Style, requested: &Value) -> Result<(), String> {
                     .ok_or("underline must be a string")?
                     .to_string()
             }
-            "font_size" => {
-                style.font.size = value.as_f64().ok_or("font_size must be a number")?
-            }
+            "font_size" => style.font.size = value.as_f64().ok_or("font_size must be a number")?,
             "font_name" => {
                 style.font.name = value
                     .as_str()
@@ -444,25 +457,32 @@ fn apply_style(style: &mut Style, requested: &Value) -> Result<(), String> {
                 style.fill.fill_type = Some("solid".to_string());
                 style.fill.start_color = Color::new(colour);
             }
-            "number_format" => {
-                style.number_format.set_format_code(
-                    value
-                        .as_str()
-                        .ok_or("number_format must be a string")?,
-                )
-            }
+            "number_format" => style
+                .number_format
+                .set_format_code(value.as_str().ok_or("number_format must be a string")?),
             "horizontal" => {
                 let requested = value.as_str().ok_or("horizontal must be a string")?;
-                if !matches!(requested, "general" | "left" | "center" | "right" | "fill" | "justify" | "centerContinuous" | "distributed")
-                {
+                if !matches!(
+                    requested,
+                    "general"
+                        | "left"
+                        | "center"
+                        | "right"
+                        | "fill"
+                        | "justify"
+                        | "centerContinuous"
+                        | "distributed"
+                ) {
                     return Err(format!("{requested:?} is not a horizontal alignment"));
                 }
                 style.alignment.horizontal = requested.to_string();
             }
             "vertical" => {
                 let requested = value.as_str().ok_or("vertical must be a string")?;
-                if !matches!(requested, "top" | "center" | "bottom" | "justify" | "distributed")
-                {
+                if !matches!(
+                    requested,
+                    "top" | "center" | "bottom" | "justify" | "distributed"
+                ) {
                     return Err(format!("{requested:?} is not a vertical alignment"));
                 }
                 style.alignment.vertical = requested.to_string();
@@ -474,9 +494,7 @@ fn apply_style(style: &mut Style, requested: &Value) -> Result<(), String> {
                 style.alignment.indent = value.as_i64().ok_or("indent must be an integer")?
             }
             "text_rotation" => {
-                let rotation = value
-                    .as_i64()
-                    .ok_or("text_rotation must be an integer")?;
+                let rotation = value.as_i64().ok_or("text_rotation must be an integer")?;
                 if !(-90..=90).contains(&rotation) && !(91..=180).contains(&rotation) {
                     return Err(format!(
                         "text_rotation must be between -90 and 90, or 91 and 180, not {rotation}"
@@ -634,7 +652,11 @@ mod tests {
             &json!({ "border": "medium", "border_color": "FF00FF00" }),
         )
         .unwrap();
-        for side in [&style.borders.left, &style.borders.right, &style.borders.top] {
+        for side in [
+            &style.borders.left,
+            &style.borders.right,
+            &style.borders.top,
+        ] {
             assert_eq!(side.border_style.as_deref(), Some("medium"));
             assert_eq!(side.color.index, "FF00FF00");
         }
@@ -690,11 +712,15 @@ mod tests {
         let args = Args::new(&json!({
             "path": "report.xlsx", "columns": "A", "width": 0,
         }));
-        assert!(set_column_width(&workspace, &args).unwrap_err().contains("greater than zero"));
+        assert!(set_column_width(&workspace, &args)
+            .unwrap_err()
+            .contains("greater than zero"));
         let args = Args::new(&json!({
             "path": "report.xlsx", "rows": "1", "height": -1,
         }));
-        assert!(set_row_height(&workspace, &args).unwrap_err().contains("greater than zero"));
+        assert!(set_row_height(&workspace, &args)
+            .unwrap_err()
+            .contains("greater than zero"));
     }
 
     #[test]

@@ -536,14 +536,8 @@ mod tests {
         let xml = write_properties_core(&workbook.properties);
         let root = fromstring(xml.as_bytes()).unwrap();
         assert_eq!(root.tag, format!("{{{COREPROPS_NS}}}coreProperties"));
-        assert_eq!(
-            root.find_text(format!("{{{DCORE_NS}}}creator"), ""),
-            "eric"
-        );
-        assert_eq!(
-            root.find_text(format!("{{{DCORE_NS}}}title"), ""),
-            "Report"
-        );
+        assert_eq!(root.find_text(format!("{{{DCORE_NS}}}creator"), ""), "eric");
+        assert_eq!(root.find_text(format!("{{{DCORE_NS}}}title"), ""), "Report");
         assert!(xml.contains("W3CDTF"));
     }
 

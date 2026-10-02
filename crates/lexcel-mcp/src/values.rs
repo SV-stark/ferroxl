@@ -31,7 +31,9 @@ pub fn from_json(value: &Value) -> Result<CellValue, ValueError> {
         Value::Bool(flag) => CellValue::Bool(*flag),
         Value::Number(number) => {
             let parsed = number.as_f64().ok_or_else(|| {
-                ValueError(format!("{number} cannot be represented as a spreadsheet number"))
+                ValueError(format!(
+                    "{number} cannot be represented as a spreadsheet number"
+                ))
             })?;
             CellValue::Number(parsed)
         }
@@ -53,7 +55,9 @@ pub fn from_text(text: &str) -> Result<CellValue, ValueError> {
     let trimmed = text.trim();
     if let Some(formula) = trimmed.strip_prefix('=') {
         if formula.is_empty() {
-            return Err(ValueError("a formula needs something after '='".to_string()));
+            return Err(ValueError(
+                "a formula needs something after '='".to_string(),
+            ));
         }
         return Ok(CellValue::Formula(format!("={formula}")));
     }
@@ -175,10 +179,7 @@ mod tests {
 
     #[test]
     fn a_trailing_percent_becomes_a_fraction() {
-        assert_eq!(
-            from_json(&json!("50%")).unwrap(),
-            CellValue::Number(0.5)
-        );
+        assert_eq!(from_json(&json!("50%")).unwrap(), CellValue::Number(0.5));
         // A percent sign that is not a number stays text.
         assert!(matches!(
             from_json(&json!("50% off")).unwrap(),

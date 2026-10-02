@@ -65,7 +65,11 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("{SERVER_NAME} {} serving {}", env!("CARGO_PKG_VERSION"), workspace.root().display());
+    eprintln!(
+        "{SERVER_NAME} {} serving {}",
+        env!("CARGO_PKG_VERSION"),
+        workspace.root().display()
+    );
     run(&workspace)
 }
 
@@ -172,12 +176,8 @@ fn call_tool(workspace: &Workspace, request: &Request) -> Result<Value, rpc::Rpc
         // message and correct its call. An unknown tool or an inconsistent server is a
         // protocol-level error.
         Err(handlers::ToolFailure::Failed(message)) => Ok(rpc::tool_error(&message)),
-        Err(handlers::ToolFailure::Unknown(name)) => {
-            Err(rpc::RpcFailure::tool_not_found(&name))
-        }
-        Err(handlers::ToolFailure::Broken(message)) => {
-            Err(rpc::RpcFailure::internal(message))
-        }
+        Err(handlers::ToolFailure::Unknown(name)) => Err(rpc::RpcFailure::tool_not_found(&name)),
+        Err(handlers::ToolFailure::Broken(message)) => Err(rpc::RpcFailure::internal(message)),
     }
 }
 
@@ -264,7 +264,10 @@ mod tests {
             }),
         );
         assert_eq!(response["result"]["protocolVersion"], json!("2025-03-26"));
-        assert_eq!(response["result"]["serverInfo"]["name"], json!("lexcel-mcp"));
+        assert_eq!(
+            response["result"]["serverInfo"]["name"],
+            json!("lexcel-mcp")
+        );
         assert!(response["result"]["capabilities"]["tools"].is_object());
     }
 
@@ -423,8 +426,16 @@ mod tests {
         assert_eq!(parsed.root.as_deref(), Some("spreadsheets"));
         let parsed = Options::parse(["--root=books".to_string()].into_iter()).unwrap();
         assert_eq!(parsed.root.as_deref(), Some("books"));
-        assert!(Options::parse(["--help".to_string()].into_iter()).unwrap().help);
-        assert!(Options::parse(["-V".to_string()].into_iter()).unwrap().version);
+        assert!(
+            Options::parse(["--help".to_string()].into_iter())
+                .unwrap()
+                .help
+        );
+        assert!(
+            Options::parse(["-V".to_string()].into_iter())
+                .unwrap()
+                .version
+        );
     }
 
     #[test]

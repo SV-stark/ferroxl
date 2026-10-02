@@ -404,9 +404,7 @@ mod tests {
         // `date`, so that is what a reloaded cell reports.
         assert_eq!(
             reloaded.worksheets[0].cell_value("A1"),
-            Some(CellValue::DateTime(
-                date.and_time(chrono::NaiveTime::MIN)
-            ))
+            Some(CellValue::DateTime(date.and_time(chrono::NaiveTime::MIN)))
         );
         assert_eq!(reloaded.worksheets[0].number_format("A1"), "yyyy-mm-dd");
     }

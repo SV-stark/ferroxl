@@ -349,10 +349,7 @@ impl Worksheet {
         // coordinate that has no cell yet creates an empty one, which is why the writer can
         // attach a style to a blank cell.
         self.create_cell(coordinate)?;
-        let entry = self
-            .styles
-            .entry(coordinate.to_string())
-            .or_default();
+        let entry = self.styles.entry(coordinate.to_string()).or_default();
         if entry.is_static {
             *entry = entry.copy_style();
         }

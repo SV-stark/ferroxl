@@ -175,7 +175,9 @@ mod tests {
     #[test]
     fn missing_workbooks_are_reported_by_name() {
         let workspace = workspace();
-        let error = workspace.load("absent.xlsx", LoadOptions::default()).unwrap_err();
+        let error = workspace
+            .load("absent.xlsx", LoadOptions::default())
+            .unwrap_err();
         assert!(error.contains("absent.xlsx"), "{error}");
     }
 

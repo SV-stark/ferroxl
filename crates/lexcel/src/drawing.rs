@@ -592,10 +592,10 @@ mod tests {
     }
 
     /// A PNG containing only the signature and an `IHDR` chunk.
-///
-/// The decoder reads the dimensions from the header, so the image data is not needed for
-/// the tests.
-fn minimal_png(width: u32, height: u32) -> Vec<u8> {
+    ///
+    /// The decoder reads the dimensions from the header, so the image data is not needed for
+    /// the tests.
+    fn minimal_png(width: u32, height: u32) -> Vec<u8> {
         let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
         png.extend_from_slice(&13u32.to_be_bytes());
         png.extend_from_slice(b"IHDR");

@@ -724,7 +724,11 @@ impl Args {
     /// typo, and ignoring it silently is how a caller ends up believing it set something it
     /// did not.
     pub fn reject_unknown(&self, spec: &ToolSpec) -> Result<(), String> {
-        let Some(declared) = spec.input_schema.get("properties").and_then(Value::as_object) else {
+        let Some(declared) = spec
+            .input_schema
+            .get("properties")
+            .and_then(Value::as_object)
+        else {
             return Ok(());
         };
         let Some(sent) = self.value.as_object() else {
@@ -825,8 +829,14 @@ mod tests {
     #[test]
     fn wrong_argument_types_are_reported_rather_than_coerced() {
         let args = Args::new(&json!({ "cell": 7, "flag": "yes", "list": "not a list" }));
-        assert!(args.require_str("cell").unwrap_err().contains("must be a string"));
-        assert!(args.require_array("list").unwrap_err().contains("must be an array"));
+        assert!(args
+            .require_str("cell")
+            .unwrap_err()
+            .contains("must be a string"));
+        assert!(args
+            .require_array("list")
+            .unwrap_err()
+            .contains("must be an array"));
         // A string is not read as a number, so an optional number falls back to `None`.
         assert_eq!(args.opt_number("flag"), None);
     }
@@ -896,7 +906,10 @@ mod tests {
             "border",
             "border_color",
         ] {
-            assert!(properties.contains_key(key), "{key} is read but not declared");
+            assert!(
+                properties.contains_key(key),
+                "{key} is read but not declared"
+            );
         }
     }
 }

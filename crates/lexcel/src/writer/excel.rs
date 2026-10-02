@@ -350,10 +350,7 @@ mod tests {
         let bytes = save_virtual_workbook(sample_workbook()).unwrap();
         let sheet = part_contents(&bytes, "xl/worksheets/sheet1.xml");
         assert!(sheet.contains("ref=\"A1:B1\""));
-        assert!(
-            !sheet.contains("hello"),
-            "strings live in sharedStrings"
-        );
+        assert!(!sheet.contains("hello"), "strings live in sharedStrings");
     }
 
     #[test]

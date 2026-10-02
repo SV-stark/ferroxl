@@ -194,8 +194,8 @@ pub fn cells_in_range(
 /// returned string is the bare hex, which is the form lexcel stores.
 pub fn check_colour(name: &str, value: &str) -> Result<String, String> {
     let trimmed = value.trim().trim_start_matches('#');
-    let well_formed = matches!(trimmed.len(), 6 | 8)
-        && trimmed.chars().all(|c| c.is_ascii_hexdigit());
+    let well_formed =
+        matches!(trimmed.len(), 6 | 8) && trimmed.chars().all(|c| c.is_ascii_hexdigit());
     if well_formed {
         return Ok(trimmed.to_ascii_uppercase());
     }

@@ -34,11 +34,15 @@ pub fn workspace() -> Workspace {
     let _ = std::fs::remove_dir_all(&root);
     let workspace = Workspace::new(&root).expect("fixture root");
 
-    workspace.save(report_workbook(), "report.xlsx").expect("report");
+    workspace
+        .save(report_workbook(), "report.xlsx")
+        .expect("report");
     workspace
         .save(numbers_workbook(), "numbers.xlsx")
         .expect("numbers");
-    workspace.save(named_workbook(), "names.xlsx").expect("names");
+    workspace
+        .save(named_workbook(), "names.xlsx")
+        .expect("names");
     workspace
 }
 

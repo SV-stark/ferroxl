@@ -22,6 +22,7 @@ crates/
 - [Reading a workbook](#reading-a-workbook)
 - [Writing a workbook](#writing-a-workbook)
 - [What is covered](#what-is-covered)
+- [Feature parity](#feature-parity)
 - [Dates and the two calendars](#dates-and-the-two-calendars)
 - [Differences from openpyxl](#differences-from-openpyxl)
 - [The MCP server](#the-mcp-server)
@@ -67,13 +68,14 @@ println!("{:?}", sheet.cell_value("B2"));
 already-read buffer, which is what a web service wants. `LoadOptions` carries the same
 switches as the Python call:
 
-| Field | Meaning |
-| --- | --- |
-| `guess_types` | Infer a cell's type from its text rather than trusting the stored one |
-| `data_only` | Return the value Excel last cached instead of the formula |
-| `keep_vba` | Keep the original package bytes so `keep_vba=True` works on save |
-| `rich_text` | Preserve rich-text runs rather than concatenating them |
-| `encoding` | The workbook's declared encoding |
+| Field | Builder | Meaning |
+| --- | --- | --- |
+| `guess_types` | `guessing_types()` | Infer a cell's type from its text rather than trusting the stored one, so `"50%"` loads as `0.5` |
+| `data_only` | `values_only()` | Return the value Excel last cached instead of the formula |
+| `keep_vba` | `keeping_vba()` | Keep the original package bytes so the VBA project survives a save |
+
+Those three are the whole of openpyxl 1.9's `load_workbook` switches. Rich text is
+concatenated with its formatting discarded, which is also what openpyxl 1.9 does.
 
 A value read back from a file is always reconstructed from the serial, so a date cell
 reports a `DateTime` — the same as openpyxl, which also loses the distinction between
@@ -132,6 +134,22 @@ instead, and `lexcel::writer::save_workbook_to` streams it to any `Write`.
 | `worksheet` | `openpyxl/worksheet` | `Worksheet`, dimensions, views, panes, protection, header/footer, iteration |
 | `writer` | `openpyxl/writer` | the whole save path, including the streaming XML writer |
 | `xml` | `openpyxl/xml` | an ElementTree-shaped element tree, a streaming writer, and the namespace constants |
+
+## Feature parity
+
+[PARITY.md](PARITY.md) is the module-by-module account of what is implemented, what is
+pending, and where the Rust version differs on purpose. It is generated from an audit of
+the two source trees, so it can be re-run rather than believed:
+
+```console
+$ python tools/parity.py path/to/openpyxl/openpyxl
+```
+
+Of openpyxl's 272 public names, 195 have a direct counterpart. The 77 that do not are
+accounted for: 13 are genuinely pending, 37 are a name or a container that had to change,
+and 27 are `lxml` and Python infrastructure with no Rust equivalent. The pending list is
+the streaming writer, `Worksheet.range()` with offsets, the `use_iterators` loader, reading
+the stored `<dimension>`, zip repair, and reading charts back.
 
 ## Dates and the two calendars
 
@@ -275,6 +293,7 @@ $ cargo build --workspace                  # build
 $ cargo test --workspace                   # 480 tests
 $ cargo doc --workspace                    # API documentation
 $ python tools/check_readme.py             # the README examples are the doctests
+$ python tools/parity.py ../openpyxl        # audit the public surface against openpyxl
 ```
 
 The examples in this README are the library's own doctests, checked by

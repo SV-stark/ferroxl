@@ -58,7 +58,10 @@ pub fn describe_sheet(workspace: &Workspace, args: &Args) -> Handled {
     let temporal = count_kind(&cells, |value| {
         matches!(
             value,
-            CellValue::Date(_) | CellValue::DateTime(_) | CellValue::Time(_) | CellValue::Duration(_)
+            CellValue::Date(_)
+                | CellValue::DateTime(_)
+                | CellValue::Time(_)
+                | CellValue::Duration(_)
         )
     });
     let formulas = count_kind(&cells, |value| matches!(value, CellValue::Formula(_)));
@@ -205,7 +208,10 @@ pub fn search_values(workspace: &Workspace, args: &Args) -> Handled {
     let query = args.require_str("query")?;
     let case_sensitive = args.opt_bool("case_sensitive", false);
     let match_formulas = args.opt_bool("match_formulas", true);
-    let limit = args.opt_usize("max_results").unwrap_or(100).clamp(1, 10_000);
+    let limit = args
+        .opt_usize("max_results")
+        .unwrap_or(100)
+        .clamp(1, 10_000);
     let range = used_range(sheet, args)?;
 
     let needle = if case_sensitive {
@@ -278,7 +284,9 @@ pub fn summarize_range(workspace: &Workspace, args: &Args) -> Handled {
             CellValue::Text(text) if text.is_empty() => blanks += 1,
             CellValue::Text(_) => text += 1,
             CellValue::Bool(_) => booleans += 1,
-            CellValue::Date(_) | CellValue::DateTime(_) | CellValue::Time(_)
+            CellValue::Date(_)
+            | CellValue::DateTime(_)
+            | CellValue::Time(_)
             | CellValue::Duration(_) => temporals += 1,
             // A non-finite serial has no useful aggregate, so it is left out entirely.
             _ => {}
@@ -342,10 +350,7 @@ pub fn list_comments(workspace: &Workspace, args: &Args) -> Handled {
         if rows.len() == 1 { "" } else { "s" },
         sheet.title
     );
-    Ok((
-        summary,
-        json!({ "sheet": sheet.title, "comments": rows }),
-    ))
+    Ok((summary, json!({ "sheet": sheet.title, "comments": rows })))
 }
 
 /// List the workbook's defined names.
@@ -601,7 +606,11 @@ mod tests {
         let (_, payload) = list_named_ranges(&workspace, &args).unwrap();
         let names = payload["names"].as_array().unwrap();
         assert_eq!(names[0]["name"], json!("Totals"));
-        assert_eq!(names[0]["destinations"][0]["sheet"], json!("Data"), "{names:?}");
+        assert_eq!(
+            names[0]["destinations"][0]["sheet"],
+            json!("Data"),
+            "{names:?}"
+        );
     }
 
     #[test]

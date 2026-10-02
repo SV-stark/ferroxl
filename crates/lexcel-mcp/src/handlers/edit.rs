@@ -32,9 +32,7 @@ pub fn create_workbook(workspace: &Workspace, args: &Args) -> Handled {
     // the rest are appended.
     for (position, name) in requested.iter().enumerate() {
         if position == 0 {
-            workbook.worksheets[0]
-                .set_title(name, &[])
-                .map_err(err)?;
+            workbook.worksheets[0].set_title(name, &[]).map_err(err)?;
         } else {
             workbook.create_sheet(Some(name)).map_err(err)?;
         }
@@ -58,7 +56,10 @@ pub fn add_sheet(workspace: &Workspace, args: &Args) -> Handled {
     };
     workspace.save(workbook, &path)?;
     let summary = format!("added sheet {title:?} at position {index}");
-    Ok((summary, json!({ "path": path, "name": title, "index": index })))
+    Ok((
+        summary,
+        json!({ "path": path, "name": title, "index": index }),
+    ))
 }
 
 /// Delete a sheet.
@@ -122,7 +123,10 @@ pub fn freeze_panes(workspace: &Workspace, args: &Args) -> Handled {
         Some(cell) => format!("froze panes at {cell} on {name}"),
         None => format!("unfroze panes on {name}"),
     };
-    Ok((summary, json!({ "path": path, "sheet": name, "cell": applied })))
+    Ok((
+        summary,
+        json!({ "path": path, "sheet": name, "cell": applied }),
+    ))
 }
 
 /// Set or clear the autofilter.
@@ -165,7 +169,10 @@ pub fn add_named_range(workspace: &Workspace, args: &Args) -> Handled {
     };
     // The sheet is passed separately, so a sheet qualifier on the range would be written
     // twice. openpyxl's `create_named_range` has the same shape and takes a bare range.
-    let bare = range.rsplit_once('!').map(|(_, tail)| tail).unwrap_or(&range);
+    let bare = range
+        .rsplit_once('!')
+        .map(|(_, tail)| tail)
+        .unwrap_or(&range);
     workbook.add_named_range(NamedRange::new(
         name.clone(),
         vec![(index, bare.to_string())],
@@ -189,7 +196,9 @@ pub fn set_cell(workspace: &Workspace, args: &Args) -> Handled {
         .ok_or_else(|| "value is required".to_string())?;
     let value = values::from_json(raw).map_err(|e| e.0)?;
     let (mut workbook, index) = open_for_edit(workspace, args)?;
-    workbook.worksheets[index].set(&cell, value.clone()).map_err(err)?;
+    workbook.worksheets[index]
+        .set(&cell, value.clone())
+        .map_err(err)?;
     let name = workbook.worksheets[index].title().to_string();
     workspace.save(workbook, &path)?;
     let summary = format!("wrote {} to {name}!{cell}", values::to_display(&value));
@@ -211,8 +220,7 @@ pub fn write_cells(workspace: &Workspace, args: &Args) -> Handled {
     let rows = args.require_array("rows")?;
     let (mut workbook, index) = open_for_edit(workspace, args)?;
 
-    let (start_column, start_row) =
-        lexcel::coordinate_from_string(&start).map_err(err)?;
+    let (start_column, start_row) = lexcel::coordinate_from_string(&start).map_err(err)?;
     let start_column = lexcel::column_index_from_string(&start_column).map_err(err)?;
     let mut written = 0usize;
     for (row_offset, row) in rows.iter().enumerate() {
@@ -221,8 +229,8 @@ pub fn write_cells(workspace: &Workspace, args: &Args) -> Handled {
             .ok_or_else(|| "every entry in rows must itself be an array".to_string())?;
         for (column_offset, raw) in cells.iter().enumerate() {
             let value = values::from_json(raw).map_err(|e| e.0)?;
-            let letter = lexcel::get_column_letter(start_column + column_offset as u32)
-                .map_err(err)?;
+            let letter =
+                lexcel::get_column_letter(start_column + column_offset as u32).map_err(err)?;
             let coordinate = format!("{letter}{}", start_row + row_offset as u32);
             workbook.worksheets[index]
                 .set(&coordinate, value)
@@ -254,10 +262,7 @@ pub fn append_row(workspace: &Workspace, args: &Args) -> Handled {
         .map_err(err)?;
     let name = workbook.worksheets[index].title().to_string();
     workspace.save(workbook, &path)?;
-    let summary = format!(
-        "appended {} value(s) to row {row} of {name}",
-        parsed.len()
-    );
+    let summary = format!("appended {} value(s) to row {row} of {name}", parsed.len());
     Ok((
         summary,
         json!({ "path": path, "sheet": name, "row": row, "values_written": parsed.len() }),
@@ -464,10 +469,10 @@ mod tests {
         rename_sheet(
             &workspace,
             &Args::new(&json!({
-                "path": "report.xlsx",
-                "sheet": "Extra",
-                "title": "Renamed",
-})),
+                            "path": "report.xlsx",
+                            "sheet": "Extra",
+                            "title": "Renamed",
+            })),
         )
         .unwrap();
         let (_, removed) = remove_sheet(
@@ -512,10 +517,7 @@ mod tests {
         .unwrap();
         assert_ne!(renamed["name"], json!("Numbers"));
         assert!(
-            renamed["name"]
-                .as_str()
-                .unwrap()
-                .starts_with("Numbers"),
+            renamed["name"].as_str().unwrap().starts_with("Numbers"),
             "the new name should still read as Numbers, got {renamed}"
         );
     }
@@ -583,11 +585,11 @@ mod tests {
         add_named_range(
             &workspace,
             &Args::new(&json!({
-                "path": "report.xlsx",
-                "name": "Extra",
-                "sheet": "Numbers",
-                "range": "A1:A5",
-})),
+                            "path": "report.xlsx",
+                            "name": "Extra",
+                            "sheet": "Numbers",
+                            "range": "A1:A5",
+            })),
         )
         .unwrap();
         let args = Args::new(&json!({

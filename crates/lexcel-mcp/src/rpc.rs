@@ -40,7 +40,10 @@ impl Request {
 
     /// Read a string field from `params`.
     pub fn string_arg(&self, name: &str) -> Option<String> {
-        self.params.get(name).and_then(Value::as_str).map(str::to_string)
+        self.params
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 }
 
@@ -194,8 +197,8 @@ pub fn failure(id: &Value, error: &RpcFailure) -> Value {
 /// `content`) from a protocol-level error, and the difference matters to the agent: the
 /// former is something the model can reason about and retry.
 pub fn tool_result(summary: &str, structured: Value) -> Value {
-    let rendered = serde_json::to_string_pretty(&structured)
-        .unwrap_or_else(|_| summary.to_string());
+    let rendered =
+        serde_json::to_string_pretty(&structured).unwrap_or_else(|_| summary.to_string());
     json!({
         "content": [
             { "type": "text", "text": summary },
@@ -244,10 +247,7 @@ mod tests {
 
     #[test]
     fn bad_payloads_are_rejected_with_the_right_code() {
-        assert_eq!(
-            parse("not json").unwrap_err().code,
-            ErrorCode::ParseError
-        );
+        assert_eq!(parse("not json").unwrap_err().code, ErrorCode::ParseError);
         assert_eq!(
             parse("[1, 2, 3]").unwrap_err().code,
             ErrorCode::InvalidRequest

@@ -112,9 +112,8 @@ fn build_series(
     } else {
         None
     };
-    let mut series = Series::new(
-        Reference::new(sheet_name, values_range, None, data_type, None).map_err(err)?,
-    );
+    let mut series =
+        Series::new(Reference::new(sheet_name, values_range, None, data_type, None).map_err(err)?);
     if let Some(name) = entry.get("name").and_then(Value::as_str) {
         series = series.with_title(name.to_string());
     }
@@ -128,7 +127,10 @@ fn build_series(
 fn sheet_range(range: &str) -> Result<(usize, usize), String> {
     let trimmed = range.trim();
     let local = trimmed.strip_prefix('=').unwrap_or(trimmed);
-    let local = local.rsplit_once('!').map(|(_, tail)| tail).unwrap_or(local);
+    let local = local
+        .rsplit_once('!')
+        .map(|(_, tail)| tail)
+        .unwrap_or(local);
     let cleaned = local.replace('$', "");
     if let Some((min, max)) = cleaned.split_once(':') {
         let (start, start_row) = lexcel::coordinate_from_string(min).map_err(err)?;
@@ -160,7 +162,9 @@ pub fn add_image(workspace: &Workspace, args: &Args) -> Handled {
     let (mut workbook, index) = open_for_edit(workspace, args)?;
     // The anchor is validated by asking the sheet where that cell sits, so a typo is
     // reported before the file is written.
-    workbook.worksheets[index].cell_anchor(&anchor).map_err(err)?;
+    workbook.worksheets[index]
+        .cell_anchor(&anchor)
+        .map_err(err)?;
     let mut image = Image::from_png(bytes).map_err(err)?;
     if let Some(width) = args.opt_number("width") {
         image.drawing.set_width(width as i64);

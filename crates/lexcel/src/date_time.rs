@@ -472,7 +472,9 @@ mod tests {
         // back as 0.
         let first: NaiveDateTime = from_excel(1.0, BaseDate::Windows1900).into();
         assert_eq!(
-            NaiveDate::from_ymd_opt(1899, 12, 31).unwrap().and_time(dt_time()),
+            NaiveDate::from_ymd_opt(1899, 12, 31)
+                .unwrap()
+                .and_time(dt_time()),
             first
         );
         assert_eq!(to_excel(first, BaseDate::Windows1900), 0.0);
