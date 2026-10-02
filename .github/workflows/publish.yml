@@ -1,0 +1,104 @@
+# Publish to crates.io.
+#
+# Triggered by a published GitHub release rather than by the tag itself, because the tag and
+# the release are not the same event: the tag starts the binary build, and a build that fails
+# should not put a crate on crates.io. `workflow_dispatch` exists for the first publish and for
+# re-running one that failed part-way.
+#
+# The two crates are published one after the other, not in parallel. `ferroxl-mcp` depends on
+# `ferroxl` by version, and crates.io refuses a package whose dependency it cannot resolve --
+# so publishing both at once fails with "no matching package named `ferroxl` found", which
+# reads like a version number is wrong rather than a race. Hence the explicit wait.
+#
+# `CARGO_REGISTRY_TOKEN` must be a crates.io API token with the `publish:new` scope on the
+# `ferroxl-2` organisation. It is a repository secret, never a variable, so it is not visible
+# to a fork's pull requests.
+
+name: Publish to crates.io
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Only this workflow needs to write; nothing else does.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    # Job level rather than per-step: the publish steps are the ones that need it, and a
+    # secret attached only to the confirmation step would let the job fail with an
+    # authentication error two steps earlier and say so far less clearly.
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      # No checkout: this job reads the version out of the tag name and lets the published
+      # source be whatever produced the release. Checking out the tag would be more precise
+      # but adds a failure mode -- a tag that cannot be fetched stops the publish, and the
+      # version guard below is the check that actually matters.
+      - name: Read the version from the tag
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.release.tag_name || github.ref_name }}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publishing ${version}"
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: crates-publish
+
+      # A dry run packages and compiles the crate exactly as an upload would, without sending
+      # anything. It is the cheapest possible check that the published artifact builds on its
+      # own rather than only inside this workspace.
+      - name: Verify the library packages and compiles
+        run: |
+          set -euo pipefail
+          cargo publish -p ferroxl --dry-run --locked
+
+      # `--locked` because Cargo.lock is committed and a publish that silently resolved
+      # different dependency versions would not be the build that was tested.
+      - name: Publish the library
+        run: cargo publish -p ferroxl --locked
+
+      - name: Wait for the registry index
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          deadline=$(( $(date +%s) + 600 ))
+          until curl -fsS -A ferroxl-publish "https://crates.io/api/v1/crates/ferroxl/$version" > /dev/null; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::ferroxl $version was uploaded but has not appeared in the index after 10 minutes"
+              echo "Check https://crates.io/crates/ferroxl before re-running; a second upload cannot replace the first."
+              exit 1
+            fi
+            echo "waiting for the index to list ferroxl $version"
+            sleep 15
+          done
+          echo "ferroxl $version is indexed"
+
+      - name: Publish the server
+        run: cargo publish -p ferroxl-mcp --locked
+
+      - name: Confirm both crates landed
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          for crate in ferroxl ferroxl-mcp; do
+            if ! curl -fsS -A ferroxl-publish "https://crates.io/api/v1/crates/$crate/$version" > /dev/null; then
+              echo "::error::$crate $version did not appear on crates.io"
+              exit 1
+            fi
+            echo "https://crates.io/crates/$crate/$version"
+          done
