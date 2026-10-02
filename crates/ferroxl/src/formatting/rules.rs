@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::formatting::{ColorScale, DxfStyle, IconSet};
+use crate::formatting::{ColorScale, DataBar, DxfStyle, IconSet};
 use crate::styles::borders::Borders;
 use crate::styles::colors::Color;
 use crate::styles::fills::Fill;
@@ -25,6 +25,8 @@ pub struct Rule {
     pub color_scale: Option<ColorScale>,
     /// Icon-set payload.
     pub icon_set: Option<IconSet>,
+    /// Data-bar payload.
+    pub data_bar: Option<DataBar>,
     /// Differential style, replaced by `dxfId` once written.
     pub dxf: Option<DxfStyle>,
 }
@@ -55,7 +57,10 @@ impl Rule {
         self
     }
 
-    /// Whether this is a data-bar rule, which openpyxl skips when writing.
+    /// Whether this is a data-bar rule.
+    ///
+    /// Kept because it names the one payload that is not a colour scale or an icon set, and a
+    /// caller walking a rule list wants to ask that without matching on a string.
     pub fn is_data_bar(&self) -> bool {
         self.rule_type == "dataBar"
     }

@@ -8,7 +8,7 @@ use crate::cell::utils::{column_index_from_string, get_column_letter};
 use crate::comments::Comment;
 use crate::datavalidation::DataValidation;
 use crate::exceptions::Result;
-use crate::formatting::{Cfvo, ColorScale, IconSet, Rule, RULE_ATTRIBUTES};
+use crate::formatting::{Cfvo, ColorScale, DataBar, IconSet, Rule, RULE_ATTRIBUTES};
 use crate::styles::borders::Borders;
 use crate::styles::colors::Color;
 use crate::styles::fills::Fill;
@@ -538,10 +538,7 @@ impl WorksheetParser<'_, '_> {
             if let Some(color_scale) = rule_node.find(self.tag("colorScale")) {
                 let mut scale = ColorScale::default();
                 for cfvo in color_scale.find_all(self.tag("cfvo")) {
-                    scale.cfvo.push(Cfvo {
-                        cfvo_type: cfvo.get("type").map(|v| v.to_string()),
-                        val: cfvo.get("val").map(|v| v.to_string()),
-                    });
+                    scale.cfvo.push(self.parse_cfvo(cfvo));
                 }
                 for color in color_scale.find_all(self.tag("color")) {
                     scale.color.push(self.parse_rule_color(color));
@@ -553,15 +550,35 @@ impl WorksheetParser<'_, '_> {
                     icon_set: icon_set.get("iconSet").map(|v| v.to_string()),
                     show_value: icon_set.get("showValue").map(|v| v.to_string()),
                     reverse: icon_set.get("reverse").map(|v| v.to_string()),
+                    percent: icon_set.get("percent").map(|v| v.to_string()),
                     cfvo: Vec::new(),
                 };
                 for cfvo in icon_set.find_all(self.tag("cfvo")) {
-                    set.cfvo.push(Cfvo {
-                        cfvo_type: cfvo.get("type").map(|v| v.to_string()),
-                        val: cfvo.get("val").map(|v| v.to_string()),
-                    });
+                    set.cfvo.push(self.parse_cfvo(cfvo));
                 }
                 rule.icon_set = Some(set);
+            }
+            // A data bar was not read at all, so a workbook using one loaded with the rule
+            // present but the bar gone: no error, no warning, and a cell that had a bar now
+            // has a rule that does nothing visible.
+            if let Some(data_bar) = rule_node.find(self.tag("dataBar")) {
+                let mut bar = DataBar {
+                    show_value: data_bar.get("showValue").map(|v| v != "0" && v != "false"),
+                    min_length: data_bar
+                        .get("minLength")
+                        .and_then(|v| v.trim().parse::<u32>().ok()),
+                    max_length: data_bar
+                        .get("maxLength")
+                        .and_then(|v| v.trim().parse::<u32>().ok()),
+                    ..DataBar::default()
+                };
+                for cfvo in data_bar.find_all(self.tag("cfvo")) {
+                    bar.cfvo.push(self.parse_cfvo(cfvo));
+                }
+                if let Some(color) = data_bar.find(self.tag("color")) {
+                    bar.color = self.parse_rule_color(color).index;
+                }
+                rule.data_bar = Some(bar);
             }
             rules.push(rule);
         }
@@ -571,6 +588,19 @@ impl WorksheetParser<'_, '_> {
             .entry(range_string.to_string())
             .or_default()
             .extend(rules);
+    }
+
+    /// Read one `<cfvo/>`, wherever it appears.
+    ///
+    /// The same element serves a colour scale, an icon set and a data bar, and `gte` is on
+    /// all three. It was read as absent, which is not the same as true: the schema defaults it
+    /// to true, so a rule written with `gte="0"` came back excluding its boundary value.
+    fn parse_cfvo(&self, node: &crate::xml::functions::Element) -> Cfvo {
+        Cfvo {
+            cfvo_type: node.get("type").map(|v| v.to_string()),
+            val: node.get("val").map(|v| v.to_string()),
+            gte: node.get("gte").map(|v| v != "0" && v != "false"),
+        }
     }
 
     fn parse_rule_color(&self, node: &crate::xml::functions::Element) -> Color {

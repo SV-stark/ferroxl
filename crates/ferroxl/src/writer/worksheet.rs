@@ -616,10 +616,6 @@ fn write_conditional_formatting(doc: &mut XmlWriter, worksheet: &Worksheet) {
         }
         doc.start_tag("conditionalFormatting", [("sqref", range)]);
         for rule in rules {
-            // Data bars are written by Excel itself from the extension list.
-            if rule.is_data_bar() {
-                continue;
-            }
             let mut attributes: Vec<(String, String)> =
                 vec![("type".to_string(), rule.rule_type.clone())];
             for name in RULE_ATTRIBUTES {
@@ -652,11 +648,38 @@ fn write_conditional_formatting(doc: &mut XmlWriter, worksheet: &Worksheet) {
                 if let Some(value) = &icon_set.reverse {
                     attributes.push(("reverse".to_string(), value.clone()));
                 }
+                if let Some(value) = &icon_set.percent {
+                    attributes.push(("percent".to_string(), value.clone()));
+                }
                 doc.start_tag("iconSet", attribute_refs(&attributes));
                 for cfvo in &icon_set.cfvo {
                     doc.tag("cfvo", attribute_refs(&cfvo.attributes()), None);
                 }
                 doc.end_tag("iconSet");
+            }
+            if let Some(bar) = &rule.data_bar {
+                // The thresholds come before the colour: the schema fixes that order.
+                let mut attributes: Vec<(String, String)> = Vec::new();
+                let mut put = |name: &str, value: Option<String>| {
+                    if let Some(value) = value {
+                        attributes.push((name.to_string(), value));
+                    }
+                };
+                put(
+                    "showValue",
+                    bar.show_value
+                        .map(|v| if v { "1".into() } else { "0".into() }),
+                );
+                put("minLength", bar.min_length.map(|v| v.to_string()));
+                put("maxLength", bar.max_length.map(|v| v.to_string()));
+                doc.start_tag("dataBar", attribute_refs(&attributes));
+                for cfvo in &bar.cfvo {
+                    doc.tag("cfvo", attribute_refs(&cfvo.attributes()), None);
+                }
+                if !bar.color.is_empty() {
+                    write_scale_color(doc, &bar.color);
+                }
+                doc.end_tag("dataBar");
             }
             doc.end_tag("cfRule");
         }
