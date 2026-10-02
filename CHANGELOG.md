@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-10-02
+
+Excel tables (ListObjects).
+
+### Added
+
+- **`worksheet::table`** — `Table`, `TableColumn`, `TableStyleInfo`, `TableFormula` and
+  `TableList`, the port of `openpyxl/worksheet/table.py`. Written to `xl/tables/tableN.xml`
+  and read back through the sheet's relationships.
+- **`Worksheet::add_table`** and **`Worksheet::table`**. The columns are read from the header
+  cells rather than invented, which is the step that makes structured references resolve: a
+  column name that disagrees with its header cell is rewritten by Excel on open, and
+  `=SUM(Table1[Sales])` breaks without saying so.
+- The four pieces a table needs in the package — the part, the relationship, the content-type
+  Override and `<tableParts>` — with their ids derived from the sheet so the sheet tail and
+  the package writer cannot disagree about which part is which.
+
+### Notes
+
+A table is verified against openpyxl 3.1.5 itself rather than only against ferroxl: the
+round-trip test saves a real package, and a cross-check loads it with Python and confirms the
+ref, display name, header count, column names and style all come back. None of the four
+package pieces is visible from any one of them, so testing each in isolation would pass while
+Excel still refused the file.
+
+A table name containing a space is refused at construction. Excel rejects it when the file is
+opened, and the error it gives names the file rather than the table.
+
+Still absent: `XMLColumnProps` for XML-mapped tables, and the query-table and xml table types.
+
 ## [0.1.4] — 2026-10-02
 
 All sixteen chart types, and cell ranges as values.

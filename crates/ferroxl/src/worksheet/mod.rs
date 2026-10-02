@@ -14,6 +14,7 @@ pub mod page;
 pub mod password_hasher;
 pub mod protection;
 pub mod relationship;
+pub mod table;
 pub mod worksheet;
 
 pub use cell_range::{CellRange, MultiCellRange};
@@ -26,4 +27,5 @@ pub use page::{PageMargins, PageSetup};
 pub use password_hasher::hash_password;
 pub use protection::SheetProtection;
 pub use relationship::{Relationship, RelationshipType};
+pub use table::{Table, TableColumn, TableList, TableStyleInfo};
 pub use worksheet::Worksheet;

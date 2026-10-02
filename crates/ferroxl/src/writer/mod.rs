@@ -7,6 +7,7 @@ pub mod dump_worksheet;
 pub mod excel;
 pub mod strings;
 pub mod styles;
+pub mod table;
 pub mod theme;
 pub mod workbook;
 pub mod worksheet;

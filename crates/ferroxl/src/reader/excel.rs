@@ -24,6 +24,7 @@ use crate::workbook::Workbook;
 use crate::xml::constants::{
     ARC_CORE, ARC_SHARED_STRINGS, ARC_STYLE, ARC_THEME, ARC_WORKBOOK, PACKAGE_WORKSHEET_RELS,
 };
+use crate::xml::functions::fromstring;
 
 /// Options controlling how a workbook is loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -229,6 +230,14 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
         if let Some(comments) = comments_for(&mut archive, &names, &part_path) {
             read_comments(&mut worksheet, &comments)?;
         }
+
+        // So do tables. Without this a saved workbook's tables would be dropped on the next
+        // save, which is the round-trip loss the writer is careful to avoid.
+        for part in tables_for(&mut archive, &names, &part_path) {
+            let xml = String::from_utf8_lossy(&part).to_string();
+            let table = crate::writer::table::read_table(&xml)?;
+            worksheet.tables.add(table)?;
+        }
         workbook.worksheets.push(worksheet);
     }
 
@@ -270,6 +279,61 @@ fn detect_parts(
                 .any(|name| name == &format!("xl/{}", sheet.path))
         })
         .collect())
+}
+
+/// Every table part a worksheet's relationships point at, in order.
+///
+/// A sheet can have several, and `<tableParts>` names them by relationship id, so the
+/// relationships part is the authority on which part is which rather than a guess from the
+/// file names. Returning the parts in relationship order is what makes that mapping
+/// recoverable.
+fn tables_for(
+    archive: &mut ZipArchive<Cursor<Vec<u8>>>,
+    names: &[String],
+    worksheet_part: &str,
+) -> Vec<Vec<u8>> {
+    if !worksheet_part.starts_with(crate::xml::constants::PACKAGE_WORKSHEETS) {
+        return Vec::new();
+    }
+    let Some(codename) = worksheet_part.rsplit('/').next() else {
+        return Vec::new();
+    };
+    let rels_part = format!("{PACKAGE_WORKSHEET_RELS}/{codename}.rels");
+    let Some(rels_data) = read_part(archive, &rels_part) else {
+        return Vec::new();
+    };
+    let Some(root) = fromstring(&rels_data).ok() else {
+        return Vec::new();
+    };
+    let mut parts = Vec::new();
+    for node in root.children() {
+        if node.get("Type") != Some(crate::writer::workbook::TABLE_REL_TYPE) {
+            continue;
+        }
+        let Some(target) = node.get("Target") else {
+            continue;
+        };
+        // Resolve `../tables/table1.xml` relative to `xl/worksheets/`.
+        let resolved = format!("{}/{target}", crate::xml::constants::PACKAGE_WORKSHEETS);
+        let mut segments: Vec<&str> = Vec::new();
+        for segment in resolved.split('/') {
+            match segment {
+                ".." => {
+                    segments.pop();
+                }
+                "." | "" => {}
+                other => segments.push(other),
+            }
+        }
+        let normalised = segments.join("/");
+        if !names.iter().any(|name| name == &normalised) {
+            continue;
+        }
+        if let Some(data) = read_part(archive, &normalised) {
+            parts.push(data);
+        }
+    }
+    parts
 }
 
 fn comments_for(

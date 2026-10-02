@@ -177,6 +177,10 @@ fn write_worksheet_tail(doc: &mut XmlWriter, worksheet: &Worksheet) -> Result<()
             None,
         );
     }
+    let table_ids: Vec<String> = worksheet.table_relationship_ids();
+    if let Some(parts) = crate::writer::table::write_table_parts(&table_ids) {
+        doc.raw(&parts);
+    }
     if let Some(root) = &vba_root {
         if let Some(legacy) = root.find(format!("{{{SHEET_MAIN_NS}}}legacyDrawing")) {
             if let Some(r_id) = legacy.get(format!("{{{REL_NS}}}id")) {
@@ -677,7 +681,12 @@ fn write_scale_color(doc: &mut XmlWriter, color: &str) {
 }
 
 /// Write the relationships part for a worksheet.
-pub fn write_worksheet_rels(worksheet: &Worksheet, drawing_id: u32, comments_id: u32) -> String {
+pub fn write_worksheet_rels(
+    worksheet: &Worksheet,
+    drawing_id: u32,
+    comments_id: u32,
+    tables: &[(String, u32)],
+) -> String {
     let mut root = Element::new(format!("{{{PKG_REL_NS}}}Relationships"));
     for relationship in &worksheet.relationships {
         let mut node = Element::new(format!("{{{PKG_REL_NS}}}Relationship"));
@@ -698,6 +707,15 @@ pub fn write_worksheet_rels(worksheet: &Worksheet, drawing_id: u32, comments_id:
         node.set("Id", "rId1");
         node.set("Type", format!("{REL_NS}/drawing"));
         node.set("Target", format!("../drawings/drawing{drawing_id}.xml"));
+        root.append(node);
+    }
+    // One relationship per table part. The id is what the sheet's `<tableParts>` refers to,
+    // so it has to be the same string in both places.
+    for (id, table_id) in tables {
+        let mut node = Element::new(format!("{{{PKG_REL_NS}}}Relationship"));
+        node.set("Id", id.clone());
+        node.set("Type", crate::writer::workbook::TABLE_REL_TYPE.to_string());
+        node.set("Target", format!("../tables/table{table_id}.xml"));
         root.append(node);
     }
     if worksheet.comment_count() > 0 {
@@ -1031,7 +1049,7 @@ mod tests {
         sheet
             .set_comment("A1", Some(crate::comments::Comment::new("note", "me")))
             .unwrap();
-        let rels = write_worksheet_rels(&sheet, 1, 1);
+        let rels = write_worksheet_rels(&sheet, 1, 1, &[]);
         assert!(rels.contains("Id=\"comments\""));
         assert!(rels.contains("../comments1.xml"));
         assert!(rels.contains("commentsDrawing1.vml"));

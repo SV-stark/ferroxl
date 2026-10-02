@@ -510,11 +510,22 @@ What is still absent is `openpyxl/worksheet/print_settings.py`, which builds `Pr
 and `PrintTitles` on top of the same two classes. That is now the only reason
 `print_settings.py` is listed here.
 
+### `worksheet/table.py` — ported in 0.1.5
+
+`Table`, `TableColumn`, `TableStyleInfo`, `TableFormula` and `TableList` are now
+`worksheet::table::*`, written to `xl/tables/tableN.xml` and read back through the sheet's
+relationships. `Worksheet::add_table` reads the column names out of the header cells, which
+is the step that makes `=SUM(Table1[Sales])` resolve: a name that disagrees with its header
+cell is silently rewritten by Excel, and a structured reference built on it breaks without
+saying so.
+
+Still absent from that module: `XMLColumnProps` (XML-mapped tables), `TablePartList` as a
+type, and the query-table and xml table types.
+
 ### `worksheet/` remainder
 
 | Module | What a user cannot do |
 | --- | --- |
-| `table.py` | Create or read an Excel table (ListObject) with `TableStyleInfo` |
 | `views.py` | Model `SheetView`, `Pane`, `Selection` — freeze panes are a pair of fields, not an object |
 | `filters.py` | `CustomFilter`, `Top10`, `DynamicFilter`, `DateGroupItem`, `ColorFilter`, `IconFilter`, `Filters`, `SortState`. Only `AutoFilter`, `FilterColumn` and `SortCondition` are ported |
 | `errors.py` | `IgnoredError` / `IgnoredErrors` / `ExtensionList` |

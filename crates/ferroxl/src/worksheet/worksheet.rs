@@ -45,6 +45,8 @@ pub struct Worksheet {
     pub images: Vec<Image>,
     /// Relationships owned by this sheet.
     pub relationships: Vec<Relationship>,
+    /// The Excel tables (ListObjects) defined on this sheet.
+    pub tables: crate::worksheet::table::TableList,
     /// Data validations.
     pub data_validations: Vec<DataValidation>,
     /// The selected cell.
@@ -151,6 +153,7 @@ impl Worksheet {
             charts: Vec::new(),
             images: Vec::new(),
             relationships: Vec::new(),
+            tables: crate::worksheet::table::TableList::new(),
             data_validations: Vec::new(),
             selected_cell: "A1".to_string(),
             active_cell: "A1".to_string(),
@@ -669,6 +672,57 @@ impl Worksheet {
     }
 
     /// Attach an image.
+    /// Define an Excel table over a range, reading its column names from the header row.
+    ///
+    /// The columns are read from the cells rather than invented, because a column name has to
+    /// match its header cell exactly or Excel rewrites it on open and any structured
+    /// reference built on it silently breaks.
+    ///
+    /// The table's part id is left at 1; the writer renumbers tables across the workbook when
+    /// it lays out the package, because part names are global and two sheets can both define
+    /// a table called `Sales`.
+    pub fn add_table(
+        &mut self,
+        table: crate::worksheet::table::Table,
+    ) -> Result<&crate::worksheet::table::TableList> {
+        let mut table = table;
+        if table.columns.is_empty() {
+            table.initialise_columns(self)?;
+        }
+        let style = crate::worksheet::table::TableStyleInfo::banded();
+        if table.style_info == Default::default() {
+            table.style_info = style;
+        }
+        self.tables.add(table)?;
+        Ok(&self.tables)
+    }
+
+    /// The relationship ids this sheet's tables use in `sheetN.xml.rels`.
+    ///
+    /// Relationship ids are scoped to the part that holds them, not to the package, so every
+    /// sheet can start at `rId1` — the drawing already does. The ids are numbered after the
+    /// drawing's because two relationships cannot share one id within a rels file.
+    ///
+    /// Deriving them here rather than passing them in keeps the sheet writer independent of
+    /// the package writer's running counters: the sheet tail is serialised by the streaming
+    /// writer too, and neither should have to agree with a counter held elsewhere.
+    pub fn table_relationship_ids(&self) -> Vec<String> {
+        let first = if self.charts.is_empty() && self.images.is_empty() {
+            1
+        } else {
+            2
+        };
+        (0..self.tables.len())
+            .map(|index| format!("rId{}", first + index))
+            .collect()
+    }
+
+    /// The table with this name.
+    pub fn table(&self, name: &str) -> Option<&crate::worksheet::table::Table> {
+        self.tables.get(name)
+    }
+
+    /// Add an image to the sheet's drawing.
     pub fn add_image(&mut self, image: Image) {
         self.images.push(image);
     }

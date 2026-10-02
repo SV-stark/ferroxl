@@ -14,6 +14,7 @@ use crate::writer::drawings::{write_drawing, write_drawing_rels, write_shapes};
 use crate::writer::dump_worksheet::DumpWorksheet;
 use crate::writer::strings::{create_string_table, write_string_table, StringTable};
 use crate::writer::styles::{build_style_tables, write_style_table, StyleTables};
+use crate::writer::table::write_table;
 use crate::writer::theme::write_theme;
 use crate::writer::workbook::{
     write_content_types, write_properties_app, write_properties_core, write_root_rels,
@@ -55,6 +56,7 @@ struct PartIds {
     image_id: u32,
     shape_id: usize,
     comments_id: u32,
+    table_id: u32,
 }
 
 impl PartIds {
@@ -66,6 +68,7 @@ impl PartIds {
             image_id: 1,
             shape_id: 1,
             comments_id: 1,
+            table_id: 1,
         }
     }
 }
@@ -212,9 +215,38 @@ impl ExcelWriter {
         index: usize,
         ids: &mut PartIds,
     ) -> Result<()> {
+        // Table parts come first so the sheet's relationship ids are settled before the rels
+        // are written: a `<tablePart>` in the sheet names a relationship in sheetN.xml.rels,
+        // and Excel reports the file as corrupt if the two disagree.
+        // The relationship ids come from the sheet, so this loop and the sheet's own
+        // `<tableParts>` cannot disagree about which part is which.
+        let table_relationship_ids: Vec<(String, u32)> = sheet
+            .table_relationship_ids()
+            .into_iter()
+            .zip(sheet.tables.iter())
+            .map(|(id, _)| (id, ids.table_id))
+            .collect();
+        for (table, (_, table_id)) in sheet.tables.iter().zip(&table_relationship_ids) {
+            writestr(
+                archive,
+                &format!("{PACKAGE_XL}/tables/table{table_id}.xml"),
+                write_table(&numbered(table, *table_id)).as_bytes(),
+            )?;
+            ids.table_id += 1;
+        }
+
         let has_drawings = !sheet.charts.is_empty() || !sheet.images.is_empty();
-        if has_drawings || !sheet.relationships.is_empty() || sheet.comment_count() > 0 {
-            let rels = write_worksheet_rels(sheet, ids.drawing_id, ids.comments_id);
+        if has_drawings
+            || !sheet.relationships.is_empty()
+            || sheet.comment_count() > 0
+            || !table_relationship_ids.is_empty()
+        {
+            let rels = write_worksheet_rels(
+                sheet,
+                ids.drawing_id,
+                ids.comments_id,
+                &table_relationship_ids,
+            );
             writestr(
                 archive,
                 &format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1),
@@ -300,6 +332,17 @@ impl ExcelWriter {
         let cursor = archive.finish().map_err(|e| Error::Io(e.to_string()))?;
         Ok(cursor.into_inner())
     }
+}
+
+/// A copy of `table` whose part id is `id`.
+///
+/// Part names are global to the package, so two sheets can each define a table called `Sales`
+/// and both need distinct `tableN.xml` entries. The id a caller set is therefore advisory:
+/// the writer is the only thing that knows the running number.
+fn numbered(table: &crate::worksheet::table::Table, id: u32) -> crate::worksheet::table::Table {
+    let mut copy = table.clone();
+    copy.id = id;
+    copy
 }
 
 fn writestr(archive: &mut ZipWriter<Cursor<Vec<u8>>>, name: &str, data: &[u8]) -> Result<()> {

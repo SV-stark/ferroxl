@@ -124,6 +124,18 @@ pub fn write_properties_core(properties: &DocumentProperties) -> String {
 ///
 /// Parts already declared by a preserved VBA archive are not re-declared, and per-sheet
 /// parts (worksheets, drawings, charts, comments) are added with running ids.
+/// The content type of a table part.
+///
+/// Its own part type rather than a variant of the worksheet's, which is why a table needs an
+/// Override in `[Content_Types].xml` even though it is not a package root.
+const TABLE_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
+
+/// The relationship type of a table part.
+pub const TABLE_REL_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/table";
+
+/// Serialise `[Content_Types].xml`.
 pub fn write_content_types(workbook: &Workbook) -> String {
     let mut seen_parts: BTreeSet<String> = BTreeSet::new();
     let mut seen_extensions: BTreeSet<String> = BTreeSet::new();
@@ -174,6 +186,19 @@ pub fn write_content_types(workbook: &Workbook) -> String {
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
                             .to_string(),
                     ),
+                ],
+            ));
+        }
+        for table in sheet.tables.iter() {
+            let part = format!("/xl/tables/table{}.xml", table.id);
+            if seen_parts.contains(&part) {
+                continue;
+            }
+            root.append(Element::with_attributes(
+                format!("{{{CONTYPES_NS}}}Override"),
+                [
+                    attr("PartName".to_string(), part),
+                    attr("ContentType".to_string(), TABLE_CONTENT_TYPE.to_string()),
                 ],
             ));
         }
