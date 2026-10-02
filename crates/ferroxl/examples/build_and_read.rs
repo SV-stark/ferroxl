@@ -5,9 +5,9 @@
 //! library: create a sheet, set cells, style a header, merge a range, freeze the panes,
 //! save, and load.
 
-use lexcel::{CellValue, Color, Fill, Font, Style, Workbook};
+use ferroxl::{CellValue, Color, Fill, Font, Style, Workbook};
 
-fn main() -> Result<(), lexcel::Error> {
+fn main() -> Result<(), ferroxl::Error> {
     let path = "orders.xlsx";
     write(path)?;
     read(path)?;
@@ -15,7 +15,7 @@ fn main() -> Result<(), lexcel::Error> {
 }
 
 /// Build the workbook and write it to `path`.
-fn write(path: &str) -> Result<(), lexcel::Error> {
+fn write(path: &str) -> Result<(), ferroxl::Error> {
     let mut workbook = Workbook::new();
 
     // `Workbook::new()` already made a sheet called `Sheet1`, and `create_sheet` appends
@@ -66,8 +66,8 @@ fn write(path: &str) -> Result<(), lexcel::Error> {
 }
 
 /// Load the workbook and print what it holds.
-fn read(path: &str) -> Result<(), lexcel::Error> {
-    let workbook = lexcel::load_workbook(path, lexcel::LoadOptions::default())?;
+fn read(path: &str) -> Result<(), ferroxl::Error> {
+    let workbook = ferroxl::load_workbook(path, ferroxl::LoadOptions::default())?;
     println!("sheets: {:?}", workbook.get_sheet_names());
 
     let sheet = workbook

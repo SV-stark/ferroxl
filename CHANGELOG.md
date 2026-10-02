@@ -7,12 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] — 2026-10-02
 
-The first release. lexcel is a Rust port of openpyxl 1.9.0: the same modules, the same
+The first release. ferroxl is a Rust port of openpyxl 1.9.0: the same modules, the same
 classes, the same behaviour, including the parts that are surprising.
 
 ### Added
 
-#### The `lexcel` library
+#### The `ferroxl` library
 
 - **`cell`** — `Cell` and `CellValue`, the data-type enum, coordinate parsing and
   formatting, read-only cells, and formula handling including shared formulas.
@@ -42,7 +42,7 @@ classes, the same behaviour, including the parts that are surprising.
 - **`xml`** — an ElementTree-shaped element tree with namespace resolution, a streaming
   writer, and the OOXML namespace constants.
 
-#### The `lexcel-mcp` server
+#### The `ferroxl-mcp` server
 
 A JSON-RPC 2.0 server over stdio, with 33 tools:
 
@@ -56,7 +56,7 @@ A JSON-RPC 2.0 server over stdio, with 33 tools:
   `add_conditional_format`.
 - *Drawing* — `add_chart`, `add_image`, `add_comment`.
 
-The workspace root comes from `--root`, then `$LEXCEL_ROOT`, then the working directory,
+The workspace root comes from `--root`, then `$FERROXL_ROOT`, then the working directory,
 and a path that escapes it is refused.
 
 ### Notes on behaviour
@@ -65,7 +65,7 @@ and a path that escapes it is refused.
   1900-02-29. `to_excel` skips it and `from_excel` does not, so the two disagree by one
   below it, exactly as openpyxl's do.
 - **Charts and images are written but not read back.** openpyxl 1.9 writes the parts and
-  its reader does not parse them; lexcel matches that rather than being half-compatible
+  its reader does not parse them; ferroxl matches that rather than being half-compatible
   in a different direction.
 - **`COLOR_INDEX` has 56 entries**, not the 64 the Excel documentation mentions, because
   matching the upstream table is what callers depend on.
@@ -95,7 +95,7 @@ Each of these is documented at the call site as well as in the README.
   `cargo clippy -- -D warnings`, `cargo doc` with warnings denied, `cargo nextest run` on
   Linux, Windows and macOS, doctests as a separate step, and an MSRV job that reads
   `rust-version` from `Cargo.toml` so the two cannot drift apart.
-- `.github/workflows/release.yml` -- on a `v*` tag: builds `lexcel-mcp` for five targets,
+- `.github/workflows/release.yml` -- on a `v*` tag: builds `ferroxl-mcp` for five targets,
   packages each with its licence and README, assembles and verifies `SHA256SUMS`, and
   publishes a draft release only once every archive is present.
 
@@ -105,7 +105,7 @@ Each of these is documented at the call site as well as in the README.
 - Values that came from Python are pinned rather than recomputed: the password hashes,
   the date serials, the Julian day numbers, the chart axis arithmetic and the
   `is_date_format` rule.
-- Files written by lexcel are opened with openpyxl 3.x and the values, styles, merges,
+- Files written by ferroxl are opened with openpyxl 3.x and the values, styles, merges,
   validations, comments, defined names and freeze panes compared.
 
-[0.1.0]: https://github.com/SV-stark/lexcel/releases/tag/v0.1.0
+[0.1.0]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 //! Read-only tools: everything an agent needs to understand a file before editing it.
 
-use lexcel::CellValue;
+use ferroxl::CellValue;
 use serde_json::{json, Value};
 
 use super::{cells_in_range, err, open, sheet_index, unknown_sheet, used_range, Handled};
@@ -361,7 +361,7 @@ pub fn list_named_ranges(workspace: &Workspace, args: &Args) -> Handled {
         .get_named_ranges()
         .iter()
         .map(|defined| match defined {
-            lexcel::DefinedName::Range(range) => {
+            ferroxl::DefinedName::Range(range) => {
                 let destinations: Vec<Value> = range
                     .destinations
                     .iter()
@@ -381,7 +381,7 @@ pub fn list_named_ranges(workspace: &Workspace, args: &Args) -> Handled {
                     "destinations": destinations,
                 })
             }
-            lexcel::DefinedName::Value(value) => json!({
+            ferroxl::DefinedName::Value(value) => json!({
                 "name": value.name,
                 "kind": "value",
                 "scope": value.scope.and_then(|index| titles.get(index).cloned()),
@@ -428,7 +428,7 @@ pub fn export_csv(workspace: &Workspace, args: &Args) -> Handled {
 }
 
 /// The values of a sheet's populated cells, in a stable order.
-fn sheet_cells(sheet: &lexcel::Worksheet) -> Vec<CellValue> {
+fn sheet_cells(sheet: &ferroxl::Worksheet) -> Vec<CellValue> {
     let mut cells: Vec<CellValue> = sheet
         .cells()
         .map(|cell| {
@@ -465,7 +465,7 @@ fn is_blank(value: &CellValue) -> bool {
 
 /// Report an unreadable sheet in a form the model can act on.
 #[allow(dead_code)]
-fn sheet_error(workbook: &lexcel::Workbook, name: &str) -> String {
+fn sheet_error(workbook: &ferroxl::Workbook, name: &str) -> String {
     unknown_sheet(workbook, name)
 }
 

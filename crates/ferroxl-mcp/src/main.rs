@@ -1,4 +1,4 @@
-//! `lexcel-mcp` — a Model Context Protocol server exposing lexcel's spreadsheet tools to
+//! `ferroxl-mcp` — a Model Context Protocol server exposing ferroxl's spreadsheet tools to
 //! AI agents.
 //!
 //! The transport is stdio, as the specification requires for a locally launched server:
@@ -8,10 +8,10 @@
 //! # Running
 //!
 //! ```text
-//! cargo run -p lexcel-mcp -- --root ./spreadsheets
+//! cargo run -p ferroxl-mcp -- --root ./spreadsheets
 //! ```
 //!
-//! `--root` (or the `LEXCEL_ROOT` environment variable) bounds every path the tools may
+//! `--root` (or the `FERROXL_ROOT` environment variable) bounds every path the tools may
 //! touch. Without it the working directory is used. The bound is a convenience for the
 //! agent, not a security sandbox: a caller that can reach this process can already do
 //! whatever it likes.
@@ -34,7 +34,7 @@ use rpc::Request;
 use workspace::Workspace;
 
 /// The program name reported to the client.
-const SERVER_NAME: &str = "lexcel-mcp";
+const SERVER_NAME: &str = "ferroxl-mcp";
 
 fn main() -> ExitCode {
     let options = match Options::parse(std::env::args().skip(1)) {
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     let root = options
         .root
         .clone()
-        .or_else(|| std::env::var("LEXCEL_ROOT").ok())
+        .or_else(|| std::env::var("FERROXL_ROOT").ok())
         .unwrap_or_else(|| ".".to_string());
     let workspace = match Workspace::new(&root) {
         Ok(workspace) => workspace,
@@ -150,7 +150,7 @@ fn initialize(request: &Request) -> Value {
         },
         "serverInfo": {
             "name": SERVER_NAME,
-            "title": "lexcel spreadsheet tools",
+            "title": "ferroxl spreadsheet tools",
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": "Read a workbook with list_sheets, describe_sheet and read_cells before \
@@ -227,7 +227,7 @@ impl Options {
              \n\
              OPTIONS:\n\
              \x20   --root <directory>  Bound every path the tools may touch. Defaults to\n\
-             \x20                       $LEXCEL_ROOT, then the working directory.\n\
+             \x20                       $FERROXL_ROOT, then the working directory.\n\
              \x20   -h, --help          Print this help and exit.\n\
              \x20   -V, --version       Print the version and exit.\n\
              \n\
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(response["result"]["protocolVersion"], json!("2025-03-26"));
         assert_eq!(
             response["result"]["serverInfo"]["name"],
-            json!("lexcel-mcp")
+            json!("ferroxl-mcp")
         );
         assert!(response["result"]["capabilities"]["tools"].is_object());
     }
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn the_usage_text_names_the_server_and_its_options() {
         let usage = Options::usage();
-        assert!(usage.contains("lexcel-mcp"));
+        assert!(usage.contains("ferroxl-mcp"));
         assert!(usage.contains("--root"));
         assert!(usage.contains("stdio"));
     }

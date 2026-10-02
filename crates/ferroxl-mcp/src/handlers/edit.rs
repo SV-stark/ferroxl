@@ -1,6 +1,6 @@
 //! Tools that change a workbook's values and structure.
 
-use lexcel::{CellValue, NamedRange, Workbook};
+use ferroxl::{CellValue, NamedRange, Workbook};
 use serde_json::{json, Value};
 
 use super::{err, open_at_sheet, open_for_edit, Handled};
@@ -220,8 +220,8 @@ pub fn write_cells(workspace: &Workspace, args: &Args) -> Handled {
     let rows = args.require_array("rows")?;
     let (mut workbook, index) = open_for_edit(workspace, args)?;
 
-    let (start_column, start_row) = lexcel::coordinate_from_string(&start).map_err(err)?;
-    let start_column = lexcel::column_index_from_string(&start_column).map_err(err)?;
+    let (start_column, start_row) = ferroxl::coordinate_from_string(&start).map_err(err)?;
+    let start_column = ferroxl::column_index_from_string(&start_column).map_err(err)?;
     let mut written = 0usize;
     for (row_offset, row) in rows.iter().enumerate() {
         let cells = row
@@ -230,7 +230,7 @@ pub fn write_cells(workspace: &Workspace, args: &Args) -> Handled {
         for (column_offset, raw) in cells.iter().enumerate() {
             let value = values::from_json(raw).map_err(|e| e.0)?;
             let letter =
-                lexcel::get_column_letter(start_column + column_offset as u32).map_err(err)?;
+                ferroxl::get_column_letter(start_column + column_offset as u32).map_err(err)?;
             let coordinate = format!("{letter}{}", start_row + row_offset as u32);
             workbook.worksheets[index]
                 .set(&coordinate, value)

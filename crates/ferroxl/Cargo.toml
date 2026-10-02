@@ -1,15 +1,15 @@
 [package]
-name = "lexcel"
+name = "ferroxl"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "lexcel: read and write Excel 2007 xlsx/xlsm files with an openpyxl-compatible API"
+description = "ferroxl: read and write Excel 2007 xlsx/xlsm files with an openpyxl-compatible API"
 keywords = ["excel", "xlsx", "spreadsheet", "ooxml"]
 categories = ["encoding", "parser-implementations"]
 
 [lib]
-name = "lexcel"
+name = "ferroxl"
 path = "src/lib.rs"
 
 [dependencies]

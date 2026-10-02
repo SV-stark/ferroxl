@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lexcel::{CellValue, Style, Workbook};
+use ferroxl::{CellValue, Style, Workbook};
 
 use crate::workspace::Workspace;
 
@@ -24,7 +24,7 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 /// and cheap: the OS reclaims the directory when the process exits.
 fn scratch(label: &str) -> std::path::PathBuf {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("lexcel-mcp-{label}-{}-{id}", std::process::id()))
+    std::env::temp_dir().join(format!("ferroxl-mcp-{label}-{}-{id}", std::process::id()))
 }
 
 /// An empty directory that no other test is using.

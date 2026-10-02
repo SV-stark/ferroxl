@@ -1,19 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/lexcel", "crates/lexcel-mcp"]
+members = ["crates/ferroxl", "crates/ferroxl-mcp"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-description = "lexcel: a Rust library to read/write Excel 2007 xlsx/xlsm files, a feature-parity port of openpyxl, with an MCP server for AI agents"
+description = "ferroxl: a Rust library to read/write Excel 2007 xlsx/xlsm files, a feature-parity port of openpyxl, with an MCP server for AI agents"
 
 [workspace.dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-lexcel = { path = "crates/lexcel", version = "0.1.0" }
+ferroxl = { path = "crates/ferroxl", version = "0.1.0" }
 png = "0.18"
-# `encoding` provides the Decoder that quick-xml's attribute API requires; lexcel reads
+# `encoding` provides the Decoder that quick-xml's attribute API requires; ferroxl reads
 # UTF-8 XML but the type is still needed at the call site.
 quick-xml = { version = "0.42", features = ["encoding"] }
 regex = "1"

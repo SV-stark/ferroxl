@@ -1,7 +1,7 @@
 //! The default Office theme (`openpyxl/writer/theme.py`).
 //!
 //! The Python module holds a single fixed XML string. It is reproduced verbatim here so
-//! that lexcel-generated files carry the same theme Excel writes, which matters for
+//! that ferroxl-generated files carry the same theme Excel writes, which matters for
 //! charts and shapes that reference theme colour slots.
 
 /// The default theme XML.

@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn saving_to_a_path_round_trips_through_the_reader() {
-        let dir = std::env::temp_dir().join("lexcel-writer-test");
+        let dir = std::env::temp_dir().join("ferroxl-writer-test");
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("roundtrip.xlsx");
         save_workbook(sample_workbook(), &path).expect("save");

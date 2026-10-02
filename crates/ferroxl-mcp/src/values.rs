@@ -1,11 +1,11 @@
-//! Moving cell values between JSON and [`lexcel::CellValue`].
+//! Moving cell values between JSON and [`ferroxl::CellValue`].
 //!
 //! An agent's JSON is untyped, so a value can arrive as `42`, `"42"`, `true` or
 //! `"=SUM(A1:A2)"`. This module makes those cases explicit rather than leaving each tool
 //! to guess, and it renders values back out in a form a model can read at a glance.
 
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
-use lexcel::CellValue;
+use ferroxl::CellValue;
 use serde_json::{json, Value};
 
 /// The error returned when a JSON value cannot become a cell value.

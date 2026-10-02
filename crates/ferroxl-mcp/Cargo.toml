@@ -1,18 +1,18 @@
 [package]
-name = "lexcel-mcp"
+name = "ferroxl-mcp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "lexcel-mcp: a Model Context Protocol server exposing lexcel spreadsheet tools to AI agents"
+description = "ferroxl-mcp: a Model Context Protocol server exposing ferroxl spreadsheet tools to AI agents"
 
 [[bin]]
-name = "lexcel-mcp"
+name = "ferroxl-mcp"
 path = "src/main.rs"
 
 [dependencies]
 chrono.workspace = true
-lexcel.workspace = true
+ferroxl.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

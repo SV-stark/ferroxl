@@ -1,11 +1,11 @@
 # Feature parity with openpyxl 1.9.0
 
-lexcel is a port of [openpyxl](https://github.com/theorchard/openpyxl) 1.9.0. This document
+ferroxl is a port of [openpyxl](https://github.com/theorchard/openpyxl) 1.9.0. This document
 records, module by module, what has been implemented, what has not, and where the Rust
 version deliberately behaves differently.
 
 It is written from the source trees, not from memory. `tools/parity.py` walks every module
-of the Python original, collects its public names, and reports which have a lexcel
+of the Python original, collects its public names, and reports which have a ferroxl
 counterpart:
 
 ```console
@@ -27,9 +27,9 @@ Re-run it after any change. The numbers below come from that run.
 Three labels are used, and they mean different things:
 
 - **Implemented** — the behaviour exists and is covered by a test.
-- **Pending** — openpyxl has it, lexcel does not. Each entry says what the effect is and
+- **Pending** — openpyxl has it, ferroxl does not. Each entry says what the effect is and
   what a caller does instead.
-- **Different by design** — lexcel does it, but not the way Python does. Each entry says
+- **Different by design** — ferroxl does it, but not the way Python does. Each entry says
   why, because a difference you did not choose is a bug.
 
 ## Summary
@@ -39,7 +39,7 @@ Three labels are used, and they mean different things:
 | Python modules audited | 70 |
 | Modules whose every public name is matched | 47 |
 | openpyxl public names | 272 |
-| Names with no lexcel counterpart | 77 |
+| Names with no ferroxl counterpart | 77 |
 
 Of those 77 unmatched names:
 
@@ -55,12 +55,12 @@ and [charts not being read back](#6-charts-and-images-are-written-but-not-read-b
 
 ## Implemented
 
-Everything in this section is covered by tests. Names are lexcel's; the upstream module is
+Everything in this section is covered by tests. Names are ferroxl's; the upstream module is
 named so a change can be traced back to the Python it mirrors.
 
 ### `cell` — `openpyxl/cell`
 
-| Upstream | lexcel |
+| Upstream | ferroxl |
 | --- | --- |
 | `cell.py::Cell` | `cell::Cell` — `coordinate`, `row`, `column`, `value`, `data_type`, `style_id`, `hyperlink` |
 | `cell.py::CellValue` | `cell::CellValue`, with `text`, `number`, `formula`, `is_empty`, `as_text`, `as_number`, `is_temporal` |
@@ -74,7 +74,7 @@ named so a change can be traced back to the Python it mirrors.
 
 ### `charts` — `openpyxl/charts`
 
-| Upstream | lexcel |
+| Upstream | ferroxl |
 | --- | --- |
 | `chart.py::ChartBase` | `charts::Chart` — `add_series`, `add_shape`, `with_title`, margins, `y_chars` |
 | `bar.py`, `line.py`, `pie.py`, `scatter.py` | `BarChart`, `LineChart`, `PieChart`, `ScatterChart`, all newtypes over `GraphChart` or `Chart`, each with `into_chart()` |
@@ -204,7 +204,7 @@ resolution; `serialize`, `to_pretty_string`, `conditional_element`, `safe_string
 `repr_float`, `escape_text`, `escape_attribute`, `REGISTERED_PREFIXES`, and all the
 namespace and archive-path constants from `xml/constants.rs`.
 
-### The `lexcel-mcp` server
+### The `ferroxl-mcp` server
 
 Not part of openpyxl. 33 tools over JSON-RPC 2.0 on stdio, grouped as reading (9),
 structure (9), values (4), layout and appearance (8) and drawing (3). See the
@@ -212,7 +212,7 @@ structure (9), values (4), layout and appearance (8) and drawing (3). See the
 
 ## Pending
 
-Six areas where openpyxl has something lexcel does not, ordered by how likely they are to
+Six areas where openpyxl has something ferroxl does not, ordered by how likely they are to
 matter.
 
 ### 1. The streaming writer (writer/dump_worksheet.py)
@@ -224,7 +224,7 @@ streams rows out as they are produced and never holds a whole sheet in memory. I
 `create_temporary_file`, and the `STYLES` / `DATETIME_STYLE` / `BOUNDING_BOX_PLACEHOLDER` /
 `DESCRIPTORS_CACHE_SIZE` constants that go with it.
 
-**Effect.** lexcel writes a workbook correctly, but peak memory scales with the size of the
+**Effect.** ferroxl writes a workbook correctly, but peak memory scales with the size of the
 sheet being written. For the sheets an agent typically produces this does not matter; for a
 hundred-thousand-row export it would.
 
@@ -237,7 +237,7 @@ only paths.
 **`Cell` objects**, which the caller can then mutate. `rows` and `columns` are convenience
 properties built on it.
 
-lexcel has `range_values(range) -> Vec<Vec<CellValue>>` and
+ferroxl has `range_values(range) -> Vec<Vec<CellValue>>` and
 `range_coordinates(range) -> Vec<String>`. There is no equivalent that hands back a
 rectangle of `Cell`s, no row/column offset arguments, and no `rows` or `columns`.
 
@@ -253,7 +253,7 @@ openpyxl's `load_workbook(..., use_iterators=True)` hands back an `IterableWorks
 parses a sheet's XML lazily and yields `ReadOnlyCell`s one at a time without building a
 `Worksheet`. That is how openpyxl reads a hundred-megabyte sheet.
 
-lexcel has the value type — `cell::ReadOnlyCell`, with `coordinate`, `internal_value`,
+ferroxl has the value type — `cell::ReadOnlyCell`, with `coordinate`, `internal_value`,
 `number_format`, `is_date`, `value` and `datetime`, plus the `ReadOnlyTables` it resolves
 against — and both are public and constructible. Nothing in `load_workbook` produces them:
 there is no `use_iterators` option and no iterator over a worksheet's cells.
@@ -267,7 +267,7 @@ reachable from a loaded workbook.
 ### 4. The stored dimension element is not read
 
 openpyxl's read-only path reads `<dimension ref="A1:D10">` and trusts it, falling back to
-the cells when the element is absent. lexcel computes the dimension from the cells it read
+the cells when the element is absent. ferroxl computes the dimension from the cells it read
 (`calculate_dimension`) and stores nothing.
 
 **Effect.** For a workbook whose stored `<dimension>` disagrees with its cells, the two
@@ -282,25 +282,25 @@ When a workbook fails to open, openpyxl searches for the end-of-central-director
 signature and truncates whatever follows it, then retries. This recovers files truncated in
 transit or with junk appended.
 
-**Effect.** A slightly damaged file that openpyxl would open, lexcel rejects with
+**Effect.** A slightly damaged file that openpyxl would open, ferroxl rejects with
 `Error::BadZipFile`.
 
 ### 6. Charts and images are written but not read back
 
 openpyxl 1.9 writes chart and drawing parts but its reader does not parse them, so a
-reloaded workbook reports no charts and no images. lexcel matches this rather than being
+reloaded workbook reports no charts and no images. ferroxl matches this rather than being
 half-compatible in a different direction.
 
 **Effect.** `worksheet.charts` and `worksheet.images` are empty after a load, even though
 the parts are in the file. Anything that depends on reading a chart back — inspecting an
-existing chart, preserving one across an edit — does not work, in lexcel or in openpyxl 1.9.
+existing chart, preserving one across an edit — does not work, in ferroxl or in openpyxl 1.9.
 
-This one is a *parity* gap rather than a *capability* gap: lexcel behaves exactly as the
+This one is a *parity* gap rather than a *capability* gap: ferroxl behaves exactly as the
 reference does.
 
 ## Different by design
 
-Places where lexcel does the job but not Python's way. Each is also documented at the call
+Places where ferroxl does the job but not Python's way. Each is also documented at the call
 site, so a reader of the code does not have to come here first.
 
 ### Equality and hashing (styles/hashable.py)
@@ -309,7 +309,7 @@ openpyxl's `HashableObject` compares a style by the fields that matter and falls
 identity for the rest, so a number format hashes by its code and two visually identical
 styles collapse to one style-table entry.
 
-Rust's `HashMap` requires `Hash` and `Eq`, so lexcel derives them but implements them using
+Rust's `HashMap` requires `Hash` and `Eq`, so ferroxl derives them but implements them using
 the comparison Python uses, with `same_visual_style` and `Style::sort_key` doing the work
 `HashableObject` does. The `HashableObject` *type* does not exist.
 
@@ -328,20 +328,20 @@ Every variant's `Display` string starts with the Python class name, so text that
 
 OOXML attributes like `<protection locked>` are genuinely three-valued: present-and-true,
 present-and-false, and absent. Python spells the third case `None`; Rust's `bool` has no
-such value. lexcel uses `ProtectionFlag::{Inherit, Locked, Unlocked}` for those attributes
+such value. ferroxl uses `ProtectionFlag::{Inherit, Locked, Unlocked}` for those attributes
 and a plain `bool` where the specification really does mean two states.
 
 ### CategoryAxis and ValueAxis are constructors
 
 In Python they are classes that differ only in their class-level attribute defaults. In
-lexcel they are unit structs whose `new()` returns an `Axis` configured the way the
+ferroxl they are unit structs whose `new()` returns an `Axis` configured the way the
 corresponding Python class would configure itself — which is why `new` does not return
 `Self`, and why that carries an explicit `#[allow(clippy::new_ret_no_self)]`.
 
 ### Image dimensions come from a PNG header
 
 openpyxl opens an image with PIL to read its size, which makes PIL a hard dependency for
-anyone embedding a picture. lexcel parses the PNG header directly, so PNG is the only
+anyone embedding a picture. ferroxl parses the PNG header directly, so PNG is the only
 supported format and PIL is not a dependency at all. The bytes are stored verbatim, so the
 image itself is untouched.
 
@@ -350,7 +350,7 @@ image itself is untouched.
 Renaming is not a behaviour change, but it will trip up someone porting code by search and
 replace:
 
-| openpyxl | lexcel | Why |
+| openpyxl | ferroxl | Why |
 | --- | --- | --- |
 | `pixels_to_EMU`, `EMU_to_pixels`, `cm_to_EMU`, … | `pixels_to_emu`, `emu_to_pixels`, `cm_to_emu`, … | Rust naming convention |
 | `PAPERSIZE_LETTER` … `PAPERSIZE_A5`, eleven constants | `PAPERSIZES`, a table of `(name, code)` pairs | Eleven constants are a table |
@@ -366,7 +366,7 @@ replace:
 ### Writer classes became functions
 
 openpyxl's writers are classes with `write()` and `close()` methods, which lets them stream
-through an open file handle. lexcel's writers build a `String` and hand it to the archive,
+through an open file handle. ferroxl's writers build a `String` and hand it to the archive,
 so there is no handle to own and no state worth capturing — `write_worksheet(...)`,
 `write_workbook(...)`, `write_chart(...)` and the rest are free functions.
 
@@ -378,7 +378,7 @@ refactor: the function-shaped writers have nowhere to put a stream.
 
 ### Style tables are sorted before they are written
 
-openpyxl keeps the style table in insertion order. lexcel sorts by `Style::sort_key` so two
+openpyxl keeps the style table in insertion order. ferroxl sorts by `Style::sort_key` so two
 runs that build the same set of styles produce byte-identical output. Excel does not care
 about the order; a diff does.
 
@@ -389,18 +389,18 @@ Python-only infrastructure with no Rust counterpart, or a counterpart that is wo
 | Upstream | Why not |
 | --- | --- |
 | `compat/` — `functools`, `itertools`, `numbers`, `odict`, `singleton`, `strings` | Shims for Python 2, the `OrderedDict` recipe and `Decimal`. Rust has these in the standard library or as `f64`. |
-| `xml/namespace.py::register_namespace` | `lxml`'s global namespace registry. lexcel has fixed constants and resolves prefixes locally. |
+| `xml/namespace.py::register_namespace` | `lxml`'s global namespace registry. ferroxl has fixed constants and resolves prefixes locally. |
 | `xml/functions.py::iterparse`, `safe_iterparse`, `safe_iterator`, `get_document_content` | Streaming `lxml` iterators. `fromstring` reads a whole part. Tied to the streaming-writer gap. |
 | `xml/functions.py::pretty_indent` | `to_pretty_string` covers it. |
-| `reader/style.py::SharedStylesParser`, `reader/worksheet.py::fast_parse`, `reader/comments.py::get_comments_file` | Internal parser scaffolding. lexcel exposes `read_style_table`, `read_worksheet`, `read_comments` and `comments_file_path`; the private `WorksheetParser` and `WorksheetParseContext` do the rest. |
-| `namedrange.py::NAMED_RANGE_RE`, `SPLIT_NAMED_RANGE_RE` | Module-private regexes; lexcel parses the grammar by hand, which is what the tests exercise. |
+| `reader/style.py::SharedStylesParser`, `reader/worksheet.py::fast_parse`, `reader/comments.py::get_comments_file` | Internal parser scaffolding. ferroxl exposes `read_style_table`, `read_worksheet`, `read_comments` and `comments_file_path`; the private `WorksheetParser` and `WorksheetParseContext` do the rest. |
+| `namedrange.py::NAMED_RANGE_RE`, `SPLIT_NAMED_RANGE_RE` | Module-private regexes; ferroxl parses the grammar by hand, which is what the tests exercise. |
 | `cell/cell.py::COORD_RE`, `ABSOLUTE_RE`, `ILLEGAL_CHARACTERS_RE`, `TIME_REGEX`, `TIME_TYPES`, `KNOWN_TYPES` | Compiled once and kept private. The behaviour is in `coordinate_from_string`, `absolute_coordinate`, `get_range_boundaries`, `check_string` and the `cast_*` methods. |
 | `datavalidation.py::default_attr_map`, `styles/__init__.py::DEFAULTS`, `writer/workbook.py::static_content_types_config`, `writer/theme.py::theme_xml` | Module-private data. The content types and the theme are built by the writer, from `STATIC_CONTENT_TYPES` and `THEME_XML`. |
 | `worksheet/worksheet.py::SheetView` | An empty `pass` class upstream. The fields are on `Worksheet`. |
-| `worksheet/iter_worksheet.py::IterableWorksheet`, `ROW_TAG`, `CELL_TAG`, `VALUE_TAG`, `FORMULA_TAG`, `DIMENSION_TAG` | The streaming worksheet class and its module-private tag constants. lexcel's `ReadOnlyCell` and `ReadOnlyTables` give the same access, and the reader matches tag names at run time. |
+| `worksheet/iter_worksheet.py::IterableWorksheet`, `ROW_TAG`, `CELL_TAG`, `VALUE_TAG`, `FORMULA_TAG`, `DIMENSION_TAG` | The streaming worksheet class and its module-private tag constants. ferroxl's `ReadOnlyCell` and `ReadOnlyTables` give the same access, and the reader matches tag names at run time. |
 | `charts/series.py::Serie` | A backwards-compatibility alias for `Series`. |
 | `worksheet/worksheet.py::flatten` | A Python 2 leftover; it takes one argument and returns it. |
-| `benchmarks/`, `sample/`, `tests/` | Python's own. lexcel has its own tests, 481 of them. |
+| `benchmarks/`, `sample/`, `tests/` | Python's own. ferroxl has its own tests, 481 of them. |
 
 ## How parity is verified
 
@@ -418,14 +418,14 @@ observable from openpyxl, the test asserts the number Python produces:
 - the chart axis padding and rounding
 - `COLOR_INDEX` having 56 entries rather than the 64 the documentation mentions
 
-**Files are opened with real openpyxl.** Workbooks lexcel writes are loaded with openpyxl
+**Files are opened with real openpyxl.** Workbooks ferroxl writes are loaded with openpyxl
 3.x, and the values, fonts, fills, borders, number formats, merges, conditional formatting,
 data validations, comments, defined names, column widths, freeze panes, header and footer,
 autofilters and chart series are read back and compared. `describe_sheet`'s `freeze_panes`
 and `set_header_footer` bugs were found this way, not by unit tests.
 
 **The public surface is audited.** `tools/parity.py` compares openpyxl's public names with
-lexcel's and prints what is missing. This document is its output, and the
+ferroxl's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
 The suite is 481 tests — 369 in the library, 110 in the MCP server, two doctests — and

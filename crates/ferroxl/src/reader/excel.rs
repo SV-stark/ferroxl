@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn package_bytes_reads_a_file() {
-        let dir = std::env::temp_dir().join("lexcel-package-test");
+        let dir = std::env::temp_dir().join("ferroxl-package-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bytes.xlsx");
         std::fs::write(&path, b"payload").unwrap();

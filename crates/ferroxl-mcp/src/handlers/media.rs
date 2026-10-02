@@ -1,9 +1,9 @@
 //! Tools that draw on a sheet: charts, images and comments.
 
-use lexcel::charts::reference::{Reference, ReferenceDataType};
-use lexcel::charts::{BarChart, LineChart, PieChart, ScatterChart, Series};
-use lexcel::comments::Comment;
-use lexcel::drawing::Image;
+use ferroxl::charts::reference::{Reference, ReferenceDataType};
+use ferroxl::charts::{BarChart, LineChart, PieChart, ScatterChart, Series};
+use ferroxl::comments::Comment;
+use ferroxl::drawing::Image;
 use serde_json::{json, Value};
 
 use super::{err, open_for_edit, Handled};
@@ -24,7 +24,7 @@ pub fn add_chart(workspace: &Workspace, args: &Args) -> Handled {
     }
     let (mut workbook, index) = open_for_edit(workspace, args)?;
     let sheet_name = workbook.worksheets[index].title().to_string();
-    let (column, row) = lexcel::coordinate_from_string(&anchor).map_err(err)?;
+    let (column, row) = ferroxl::coordinate_from_string(&anchor).map_err(err)?;
 
     let mut series = Vec::new();
     for (position, entry) in series_spec.iter().enumerate() {
@@ -106,7 +106,7 @@ fn build_series(
         .ok_or_else(|| format!("series {position} needs a values range"))?;
     let values_range = sheet_range(values)?;
     // A scatter plot puts numbers on both axes, so the values are forced to numeric. For
-    // the other types lexcel infers the type from the cells themselves.
+    // the other types ferroxl infers the type from the cells themselves.
     let data_type = if args.opt_str("type").as_deref() == Some("scatter") {
         Some(ReferenceDataType::Numeric)
     } else {
@@ -133,10 +133,10 @@ fn sheet_range(range: &str) -> Result<(usize, usize), String> {
         .unwrap_or(local);
     let cleaned = local.replace('$', "");
     if let Some((min, max)) = cleaned.split_once(':') {
-        let (start, start_row) = lexcel::coordinate_from_string(min).map_err(err)?;
-        let (end, end_row) = lexcel::coordinate_from_string(max).map_err(err)?;
-        let start = lexcel::column_index_from_string(&start).map_err(err)?;
-        let end = lexcel::column_index_from_string(&end).map_err(err)?;
+        let (start, start_row) = ferroxl::coordinate_from_string(min).map_err(err)?;
+        let (end, end_row) = ferroxl::coordinate_from_string(max).map_err(err)?;
+        let start = ferroxl::column_index_from_string(&start).map_err(err)?;
+        let end = ferroxl::column_index_from_string(&end).map_err(err)?;
         if end < start {
             return Err(format!("{range:?} runs backwards"));
         }
@@ -146,7 +146,7 @@ fn sheet_range(range: &str) -> Result<(usize, usize), String> {
         return Ok((start as usize, (end_row - start_row + 1) as usize));
     }
     // A bare cell is a single point.
-    lexcel::coordinate_from_string(&cleaned).map_err(err)?;
+    ferroxl::coordinate_from_string(&cleaned).map_err(err)?;
     Ok((1, 1))
 }
 
@@ -235,7 +235,7 @@ pub fn add_comment(workspace: &Workspace, args: &Args) -> Handled {
 }
 
 /// The author recorded when the caller does not name one.
-const DEFAULT_AUTHOR: &str = "lexcel-mcp";
+const DEFAULT_AUTHOR: &str = "ferroxl-mcp";
 
 #[cfg(test)]
 mod tests {
@@ -303,7 +303,7 @@ mod tests {
         assert_eq!(payload["series"], json!(1));
 
         // openpyxl does not read charts back, so a reloaded workbook reports none. The
-        // chart is in the file; the reader simply does not surface it, and lexcel matches
+        // chart is in the file; the reader simply does not surface it, and ferroxl matches
         // that.
         let args = Args::new(&json!({ "path": "report.xlsx", "sheet": "Numbers" }));
         let (_, described) = super::super::inspect::describe_sheet(&workspace, &args).unwrap();

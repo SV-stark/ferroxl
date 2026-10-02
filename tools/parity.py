@@ -1,13 +1,13 @@
 #!/usr/bin/env python
-"""Audit lexcel against the openpyxl 1.9.0 source tree, module by module.
+"""Audit ferroxl against the openpyxl 1.9.0 source tree, module by module.
 
 This is what PARITY.md is written from. Point it at a checkout of the Python original and
-it reports, for every module, which of openpyxl's public names have a lexcel counterpart.
+it reports, for every module, which of openpyxl's public names have a ferroxl counterpart.
 
     python tools/parity.py ../openpyxl/openpyxl
 
 Names are compared after lowercasing and dropping underscores, because openpyxl uses
-`snake_case` functions where lexcel has methods on a type and where a faithful port
+`snake_case` functions where ferroxl has methods on a type and where a faithful port
 renamed a few things for Rust's conventions. A name that matches only after that
 normalisation is reported separately: it is a naming difference, not a missing feature.
 
@@ -23,7 +23,7 @@ from pathlib import Path
 SKIP_PARTS = {"tests", "benchmarks", "sample", "compat", "long"}
 
 # Classes upstream that exist only to hold a dict of slot names, or are empty placeholders.
-# Their content is covered by a lexcel type with a different shape.
+# Their content is covered by a ferroxl type with a different shape.
 NOTABLE_SHAPE = {
     "formatting/rules.py:FormatRule",
     "styles/hashable.py:HashableObject",
@@ -77,7 +77,7 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     python = Path(argv[1]).resolve()
-    src = Path(__file__).resolve().parents[1] / "crates" / "lexcel" / "src"
+    src = Path(__file__).resolve().parents[1] / "crates" / "ferroxl" / "src"
     if not python.is_dir():
         print(f"{python} is not a directory")
         return 2

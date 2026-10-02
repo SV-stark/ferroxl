@@ -849,7 +849,7 @@ mod tests {
         let mut doc = XmlWriter::new();
         doc.tag("t", [("a", "x\"&<>")], Some("a<b&c>d"));
         // Python's `quoteattr` switches to single quotes when a value contains a double
-        // quote; lexcel always uses double quotes and escapes the quote itself, which is
+        // quote; ferroxl always uses double quotes and escapes the quote itself, which is
         // equivalent XML.
         assert_eq!(
             doc.as_str(),

@@ -1,13 +1,13 @@
 //! Tools for layout and appearance: dimensions, styling, validation and conditional
 //! formatting.
 
-use lexcel::datavalidation::{
+use ferroxl::datavalidation::{
     DataValidation, ValidationErrorStyle, ValidationOperator, ValidationType,
 };
-use lexcel::formatting::rules::{CellIsRule, ColorScaleRule, FormulaRule, Rule};
-use lexcel::styles::{Border, Borders, Fill, Font, Style};
-use lexcel::worksheet::{ColumnDimension, RowDimension};
-use lexcel::Color;
+use ferroxl::formatting::rules::{CellIsRule, ColorScaleRule, FormulaRule, Rule};
+use ferroxl::styles::{Border, Borders, Fill, Font, Style};
+use ferroxl::worksheet::{ColumnDimension, RowDimension};
+use ferroxl::Color;
 use serde_json::{json, Value};
 
 use super::{check_colour, err, open_for_edit, Handled};
@@ -115,10 +115,10 @@ pub fn set_header_footer(workspace: &Workspace, args: &Args) -> Handled {
 /// The header or footer section for a position, where `position` is `left`, `center` or
 /// `right`.
 fn section_mut<'a>(
-    header_footer: &'a mut lexcel::worksheet::HeaderFooter,
+    header_footer: &'a mut ferroxl::worksheet::HeaderFooter,
     position: &str,
     header: bool,
-) -> &'a mut lexcel::worksheet::HeaderFooterItem {
+) -> &'a mut ferroxl::worksheet::HeaderFooterItem {
     match (position, header) {
         ("left", true) => &mut header_footer.left_header,
         ("center", true) => &mut header_footer.center_header,
@@ -138,7 +138,7 @@ pub fn add_hyperlink(workspace: &Workspace, args: &Args) -> Handled {
     let (mut workbook, index) = open_for_edit(workspace, args)?;
     if workbook.worksheets[index].cell_value(&cell).is_none() {
         workbook.worksheets[index]
-            .set(&cell, lexcel::CellValue::text(display.clone()))
+            .set(&cell, ferroxl::CellValue::text(display.clone()))
             .map_err(err)?;
     }
     let relationship = workbook.worksheets[index]
@@ -388,7 +388,7 @@ fn colour_scale(args: &Args) -> Result<ColorScaleRule, String> {
 }
 
 /// The differential style a comparison rule applies when it matches.
-fn differential_style(args: &Args) -> Result<Option<lexcel::formatting::DxfStyle>, String> {
+fn differential_style(args: &Args) -> Result<Option<ferroxl::formatting::DxfStyle>, String> {
     let font_colour = args.opt_str("font_color");
     let fill_colour = args.opt_str("fill_color");
     let bold = args.opt_bool("bold", false);
@@ -414,7 +414,7 @@ fn differential_style(args: &Args) -> Result<Option<lexcel::formatting::DxfStyle
         }
         None => None,
     };
-    Ok(Some(lexcel::formatting::DxfStyle {
+    Ok(Some(ferroxl::formatting::DxfStyle {
         font: has_font.then_some(font),
         border: None,
         fill,
@@ -555,18 +555,18 @@ fn expand_columns(spec: &str) -> Result<Vec<String>, String> {
     let trimmed = spec.trim().to_uppercase();
     match trimmed.split_once(':') {
         Some((from, to)) => {
-            let start = lexcel::column_index_from_string(from.trim()).map_err(err)?;
-            let end = lexcel::column_index_from_string(to.trim()).map_err(err)?;
+            let start = ferroxl::column_index_from_string(from.trim()).map_err(err)?;
+            let end = ferroxl::column_index_from_string(to.trim()).map_err(err)?;
             if end < start {
                 return Err(format!("{spec:?} runs backwards"));
             }
             Ok((start..=end)
-                .map(lexcel::get_column_letter)
+                .map(ferroxl::get_column_letter)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(err)?)
         }
         None => {
-            lexcel::column_index_from_string(&trimmed).map_err(err)?;
+            ferroxl::column_index_from_string(&trimmed).map_err(err)?;
             Ok(vec![trimmed])
         }
     }

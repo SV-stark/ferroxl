@@ -1,7 +1,7 @@
 # Release automation.
 #
-# Pushing a tag of the form `v0.1.0` builds `lexcel-mcp` for every supported target and
-# attaches the archives to a GitHub release. The library `lexcel` has no binary, so there
+# Pushing a tag of the form `v0.1.0` builds `ferroxl-mcp` for every supported target and
+# attaches the archives to a GitHub release. The library `ferroxl` has no binary, so there
 # is one artifact per target rather than one per crate.
 #
 # The tag is the source of truth. `Cargo.toml` carries the version, and the two are
@@ -93,7 +93,7 @@ jobs:
           echo "releasing ${version}"
 
       - name: Build
-        run: cargo build --release --locked --bin lexcel-mcp --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin ferroxl-mcp --target ${{ matrix.target }}
         env:
           # Defaults are the native tools, so setting them unconditionally is harmless for
           # the targets that need nothing special. `matrix.linker` is empty for those, and
@@ -112,9 +112,9 @@ jobs:
           set -euo pipefail
           dir="target/${{ matrix.target }}/release"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            "$dir/lexcel-mcp.exe" --version
+            "$dir/ferroxl-mcp.exe" --version
           else
-            "$dir/lexcel-mcp" --version
+            "$dir/ferroxl-mcp" --version
           fi
 
       # A cross-compiled binary cannot be executed on this runner without emulation, so
@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          binary="target/${{ matrix.target }}/release/lexcel-mcp"
+          binary="target/${{ matrix.target }}/release/ferroxl-mcp"
           test -x "$binary" || { echo "::error::$binary is missing or not executable"; exit 1; }
           description=$(file -b "$binary")
           echo "$description"
@@ -142,13 +142,13 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           dir="target/${{ matrix.target }}/release"
           staging="staging-${{ matrix.target }}"
-          artifact="lexcel-mcp-${version}-${{ matrix.target }}.${{ matrix.archive }}"
+          artifact="ferroxl-mcp-${version}-${{ matrix.target }}.${{ matrix.archive }}"
 
           mkdir -p "dist/$staging"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "$dir/lexcel-mcp.exe" "dist/$staging/"
+            cp "$dir/ferroxl-mcp.exe" "dist/$staging/"
           else
-            cp "$dir/lexcel-mcp" "dist/$staging/"
+            cp "$dir/ferroxl-mcp" "dist/$staging/"
           fi
           # Ship the licence and the README next to the binary: a redistributable binary
           # without its licence is a licence violation.
@@ -171,7 +171,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: lexcel-mcp-${{ matrix.target }}
+          name: ferroxl-mcp-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -254,6 +254,14 @@ jobs:
           echo "${count} archives ready"
 
       - name: Publish
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        # `gh` is told which repository to act on rather than inferring it from the git
+        # remote: this job does not check the source out, so there is no remote to infer
+        # from, and the failure is an unhelpful "unable to determine base repo".
+        run: |
+          set -euo pipefail
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+          gh release view "$GITHUB_REF_NAME" --json tagName,isDraft,isPrerelease,assets \
+            --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease, assets: (.assets | length)}'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

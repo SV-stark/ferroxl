@@ -1,4 +1,4 @@
-//! lexcel — a Rust port of the `openpyxl` library for reading and writing Excel 2007
+//! ferroxl — a Rust port of the `openpyxl` library for reading and writing Excel 2007
 //! `.xlsx`/`.xlsm` files.
 //!
 //! The crate mirrors the Python package's module layout and semantics: cells
@@ -9,7 +9,7 @@
 //! # Reading
 //!
 //! ```no_run
-//! use lexcel::{load_workbook, LoadOptions};
+//! use ferroxl::{load_workbook, LoadOptions};
 //!
 //! let workbook = load_workbook("report.xlsx", LoadOptions::default())?;
 //!
@@ -26,13 +26,13 @@
 //!
 //! // One cell at a time, when a coordinate is all you have.
 //! println!("{:?}", sheet.cell_value("B2"));
-//! # Ok::<(), lexcel::Error>(())
+//! # Ok::<(), ferroxl::Error>(())
 //! ```
 //!
 //! # Writing
 //!
 //! ```no_run
-//! use lexcel::{CellValue, Style, Workbook};
+//! use ferroxl::{CellValue, Style, Workbook};
 //!
 //! let mut workbook = Workbook::new();
 //!
@@ -50,14 +50,14 @@
 //! let mut header = Style::new();
 //! header.font.bold = true;
 //! header.fill.fill_type = Some("solid".to_string());
-//! header.fill.start_color = lexcel::Color::new("FFDDDDDD".to_string());
+//! header.fill.start_color = ferroxl::Color::new("FFDDDDDD".to_string());
 //! for cell in ["A1", "B1", "C1"] {
 //!     sheet.set_style(cell, header.clone())?;
 //! }
 //! sheet.set_freeze_panes("A2");
 //!
 //! workbook.save("summary.xlsx")?;
-//! # Ok::<(), lexcel::Error>(())
+//! # Ok::<(), ferroxl::Error>(())
 //! ```
 //!
 //! # Feature parity
@@ -101,14 +101,14 @@ pub use workbook::{DocumentProperties, DocumentSecurity, Workbook};
 pub use worksheet::{AutoFilter, HeaderFooter, PageMargins, PageSetup, SheetProtection, Worksheet};
 pub use writer::{save_workbook, save_workbook_to, ExcelWriter};
 
-/// The lexcel version, matching the openpyxl release it ports.
+/// The ferroxl version, matching the openpyxl release it ports.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The upstream Python project this crate ports.
 pub const UPSTREAM_PROJECT: &str = "openpyxl";
 
 /// The MCP server crate name, for agents that discover tools by package.
-pub const MCP_SERVER: &str = "lexcel-mcp";
+pub const MCP_SERVER: &str = "ferroxl-mcp";
 
 #[cfg(test)]
 mod tests {
@@ -120,6 +120,6 @@ mod tests {
         // not leave a test asserting a major that is two releases out of date.
         assert_eq!(VERSION, env!("CARGO_PKG_VERSION"));
         assert_eq!(UPSTREAM_PROJECT, "openpyxl");
-        assert_eq!(MCP_SERVER, "lexcel-mcp");
+        assert_eq!(MCP_SERVER, "ferroxl-mcp");
     }
 }

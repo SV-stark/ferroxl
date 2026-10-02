@@ -1,4 +1,4 @@
-# Continuous integration for lexcel.
+# Continuous integration for ferroxl.
 #
 # Two things are checked, and they are checked separately because they fail for different
 # reasons: `checks` is fast and opinionated about style, `test` is slow and only cares

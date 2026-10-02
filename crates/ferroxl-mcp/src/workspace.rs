@@ -1,14 +1,14 @@
 //! Filesystem access for the tool handlers.
 //!
 //! Every path an agent supplies is resolved against a single root — the `--root` flag, or
-//! `LEXCEL_ROOT`, or the process working directory. A path that escapes the root is
+//! `FERROXL_ROOT`, or the process working directory. A path that escapes the root is
 //! refused. This is not a security sandbox, but it does stop a mistyped `../` from
 //! reaching somewhere the user never meant, and it gives the tools a documented boundary
 //! an agent can reason about.
 
 use std::path::{Component, Path, PathBuf};
 
-use lexcel::{LoadOptions, Workbook};
+use ferroxl::{LoadOptions, Workbook};
 
 /// A rooted view of the filesystem, with the helpers the tools need.
 #[derive(Debug, Clone)]
@@ -74,7 +74,8 @@ impl Workspace {
         if !resolved.exists() {
             return Err(format!("no such workbook: {path}"));
         }
-        lexcel::load_workbook(&resolved, options).map_err(|e| format!("could not read {path}: {e}"))
+        ferroxl::load_workbook(&resolved, options)
+            .map_err(|e| format!("could not read {path}: {e}"))
     }
 
     /// Write a workbook back to disk.
@@ -185,7 +186,7 @@ mod tests {
         let workspace = workspace();
         let mut workbook = Workbook::new();
         workbook.worksheets[0]
-            .set("A1", lexcel::CellValue::text("hi"))
+            .set("A1", ferroxl::CellValue::text("hi"))
             .unwrap();
         workspace.save(workbook, "round-trip.xlsx").unwrap();
         let reloaded = workspace
@@ -193,7 +194,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             reloaded.worksheets[0].cell_value("A1"),
-            Some(lexcel::CellValue::text("hi"))
+            Some(ferroxl::CellValue::text("hi"))
         );
     }
 

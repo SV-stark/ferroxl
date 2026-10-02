@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
-SOURCES = sorted((ROOT / "crates" / "lexcel" / "src").rglob("*.rs"))
+SOURCES = sorted((ROOT / "crates" / "ferroxl" / "src").rglob("*.rs"))
 
 
 def undoc(text: str) -> str:
@@ -58,7 +58,7 @@ def main() -> int:
     if failures:
         print(
             "\nEach example above must also appear verbatim in a doc comment under "
-            "crates/lexcel/src, so that `cargo test` compiles it."
+            "crates/ferroxl/src, so that `cargo test` compiles it."
         )
         return 1
     print(f"all {len(blocks)} example(s) are covered by the doctests")

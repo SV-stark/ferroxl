@@ -9,7 +9,7 @@ mod format;
 mod inspect;
 mod media;
 
-use lexcel::{LoadOptions, Workbook};
+use ferroxl::{LoadOptions, Workbook};
 
 use crate::tools::Args;
 use crate::workspace::Workspace;
@@ -108,9 +108,9 @@ pub type ToolOutput = (String, serde_json::Value);
 /// Shorthand for a handler result.
 pub type Handled = Result<ToolOutput, String>;
 
-/// Turn a lexcel error into the message a model can read.
+/// Turn a ferroxl error into the message a model can read.
 ///
-/// lexcel's errors already carry a descriptive message, so `Display` is the whole
+/// ferroxl's errors already carry a descriptive message, so `Display` is the whole
 /// conversion; naming the helper keeps the call sites short.
 pub fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -164,7 +164,7 @@ pub fn unknown_sheet(workbook: &Workbook, name: &str) -> String {
 }
 
 /// Expand a range argument, defaulting to the sheet's used range.
-pub fn used_range(sheet: &lexcel::Worksheet, args: &Args) -> Result<String, String> {
+pub fn used_range(sheet: &ferroxl::Worksheet, args: &Args) -> Result<String, String> {
     let Some(range) = args.opt_str("range") else {
         return sheet.calculate_dimension().map_err(|e| e.to_string());
     };
@@ -173,16 +173,16 @@ pub fn used_range(sheet: &lexcel::Worksheet, args: &Args) -> Result<String, Stri
 
 /// Iterate a rectangle of a sheet as `(coordinate, value)` pairs.
 pub fn cells_in_range(
-    sheet: &lexcel::Worksheet,
+    sheet: &ferroxl::Worksheet,
     range: &str,
-) -> Result<Vec<(String, lexcel::CellValue)>, String> {
+) -> Result<Vec<(String, ferroxl::CellValue)>, String> {
     let coordinates = sheet.range_coordinates(range).map_err(|e| e.to_string())?;
     Ok(coordinates
         .into_iter()
         .map(|coordinate| {
             let value = sheet
                 .cell_value(&coordinate)
-                .unwrap_or(lexcel::CellValue::None);
+                .unwrap_or(ferroxl::CellValue::None);
             (coordinate, value)
         })
         .collect())
@@ -191,7 +191,7 @@ pub fn cells_in_range(
 /// Check that a colour looks like one Excel will accept.
 ///
 /// Six digits are RGB and eight are ARGB; a leading `#` is tolerated and stripped. The
-/// returned string is the bare hex, which is the form lexcel stores.
+/// returned string is the bare hex, which is the form ferroxl stores.
 pub fn check_colour(name: &str, value: &str) -> Result<String, String> {
     let trimmed = value.trim().trim_start_matches('#');
     let well_formed =

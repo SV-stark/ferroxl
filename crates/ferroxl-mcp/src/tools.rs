@@ -514,7 +514,7 @@ fn build_catalogue() -> Vec<ToolSpec> {
                     ("sheet", string("Sheet name. Defaults to the first sheet.")),
                     ("cell", string("Cell coordinate.")),
                     ("text", string("The note. An empty string removes the note.")),
-                    ("author", string("Who is annotating. Defaults to \"lexcel-mcp\".")),
+                    ("author", string("Who is annotating. Defaults to \"ferroxl-mcp\".")),
                 ],
                 &["path", "cell", "text"],
             ),
