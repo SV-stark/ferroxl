@@ -85,8 +85,9 @@ function Test-CargoCredential {
     if ($env:CARGO_REGISTRY_TOKEN) {
         return $true
     }
-    $home = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
-    $file = Join-Path $home 'credentials.toml'
+    # Not `$home`: PowerShell's $HOME is read-only and assigning to it fails, whatever the value.
+    $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+    $file = Join-Path $cargoHome 'credentials.toml'
     if (-not (Test-Path $file)) {
         return $false
     }
