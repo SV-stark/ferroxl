@@ -5,6 +5,7 @@ pub mod comments;
 pub mod drawings;
 pub mod dump_worksheet;
 pub mod excel;
+pub mod preserved;
 pub mod strings;
 pub mod styles;
 pub mod table;

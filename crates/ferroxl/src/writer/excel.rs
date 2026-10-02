@@ -106,21 +106,28 @@ impl ExcelWriter {
     ///
     /// None of these grows with the size of a sheet's data, so both writers share them.
     fn write_package_parts(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
+        let preserved = &self.workbook.preserved;
         writestr(
             archive,
             ARC_CONTENT_TYPES,
-            write_content_types(&self.workbook).as_bytes(),
+            crate::writer::preserved::merge_content_types(
+                &write_content_types(&self.workbook),
+                preserved,
+            )
+            .as_bytes(),
         )?;
-        writestr(
-            archive,
-            ARC_ROOT_RELS,
-            write_root_rels(&self.workbook).as_bytes(),
-        )?;
-        writestr(
-            archive,
+        let (root_rels, _) = crate::writer::preserved::merge_rels(
+            &write_root_rels(&self.workbook),
+            preserved,
+            "_rels/.rels",
+        );
+        writestr(archive, ARC_ROOT_RELS, root_rels.as_bytes())?;
+        let (workbook_rels, workbook_id_map) = crate::writer::preserved::merge_rels(
+            &write_workbook_rels(&self.workbook),
+            preserved,
             ARC_WORKBOOK_RELS,
-            write_workbook_rels(&self.workbook).as_bytes(),
-        )?;
+        );
+        writestr(archive, ARC_WORKBOOK_RELS, workbook_rels.as_bytes())?;
         writestr(
             archive,
             ARC_APP,
@@ -143,11 +150,16 @@ impl ExcelWriter {
             ARC_STYLE,
             write_style_table(&self.workbook).as_bytes(),
         )?;
-        writestr(
-            archive,
-            ARC_WORKBOOK,
-            write_workbook(&self.workbook).as_bytes(),
-        )?;
+        // `<pivotCaches>` and `<externalReferences>` are how a preserved part is reached from
+        // the workbook, so they travel with it -- and their `r:id` values follow any remapping
+        // the merge above had to do.
+        let workbook_xml = crate::writer::preserved::append_children(
+            &write_workbook(&self.workbook),
+            "workbook",
+            preserved.workbook_children(),
+            &workbook_id_map,
+        );
+        writestr(archive, ARC_WORKBOOK, workbook_xml.as_bytes())?;
         writestr(
             archive,
             ARC_SHARED_STRINGS,
@@ -157,6 +169,11 @@ impl ExcelWriter {
         if let Some(vba) = &self.workbook.vba_archive {
             copy_vba_archive(archive, vba)?;
         }
+
+        // Last, so nothing here can shadow a part the writer produced. `.rels` parts are merged
+        // into the writer's rather than written as they stand, because an id the writer has
+        // reused has to move and a `r:id` naming it has to move with it.
+        crate::writer::preserved::write_parts(archive, preserved)?;
 
         Ok(())
     }
@@ -170,7 +187,7 @@ impl ExcelWriter {
     fn write_worksheets(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
         let mut ids = PartIds::first();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
-            let xml = write_worksheet(sheet, &self.string_table, &self.style_tables)?;
+            let xml = self.sheet_xml(sheet, index)?;
             writestr(
                 archive,
                 &format!("{PACKAGE_WORKSHEETS}/sheet{}.xml", index + 1),
@@ -179,6 +196,48 @@ impl ExcelWriter {
             self.write_sheet_parts(archive, sheet, index, &mut ids)?;
         }
         Ok(())
+    }
+
+    /// A sheet's part, with the preserved children the writer is not producing itself.
+    ///
+    /// A loaded sheet's `<drawing>`, `<legacyDrawing>` and `<tableParts>` are among the
+    /// preserved children: ferroxl does not read charts, legacy drawings or tables back, so for
+    /// a loaded workbook it produces none of its own and the originals are the only copy. For a
+    /// sheet being built from scratch it produces all three, and the preserved ones are dropped
+    /// instead -- two `<tableParts>` in one part is a file Excel reports as corrupt.
+    fn sheet_xml(&self, sheet: &Worksheet, index: usize) -> Result<String> {
+        let xml = write_worksheet(sheet, &self.string_table, &self.style_tables)?;
+        let mut produced: Vec<&str> = Vec::new();
+        if !sheet.charts.is_empty() || !sheet.images.is_empty() {
+            produced.push("drawing");
+            produced.push("picture");
+        }
+        if !sheet.tables.is_empty() {
+            produced.push("tableParts");
+        }
+        if sheet.comment_count() > 0 {
+            produced.push("legacyDrawing");
+            produced.push("legacyDrawingHF");
+        }
+        let rels_path = format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1);
+        // The sheet's own relationship ids are the ones its preserved children name, so the
+        // remapping has to be the one that will actually be written out.
+        let generated = write_worksheet_rels(sheet, 1, 1, &[]);
+        let (_, id_map) =
+            crate::writer::preserved::merge_rels(&generated, &self.workbook.preserved, &rels_path);
+        let kept: Vec<crate::xml::functions::Element> = self
+            .workbook
+            .preserved
+            .worksheet_children_excluding(index, &produced)
+            .into_iter()
+            .cloned()
+            .collect();
+        Ok(crate::writer::preserved::append_children(
+            &xml,
+            "worksheet",
+            &kept,
+            &id_map,
+        ))
     }
 
     /// Write every worksheet, streaming each sheet's rows into its zip entry.
@@ -236,22 +295,36 @@ impl ExcelWriter {
         }
 
         let has_drawings = !sheet.charts.is_empty() || !sheet.images.is_empty();
-        if has_drawings
+        let rels_path = format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1);
+        let preserved = &self.workbook.preserved;
+        let has_preserved = preserved
+            .relationships(&rels_path)
+            .is_some_and(|list| !list.is_empty());
+        let writer_has_own = has_drawings
             || !sheet.relationships.is_empty()
             || sheet.comment_count() > 0
-            || !table_relationship_ids.is_empty()
-        {
-            let rels = write_worksheet_rels(
-                sheet,
-                ids.drawing_id,
-                ids.comments_id,
-                &table_relationship_ids,
-            );
-            writestr(
-                archive,
-                &format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1),
-                rels.as_bytes(),
-            )?;
+            || !table_relationship_ids.is_empty();
+        if writer_has_own || has_preserved {
+            let rels = if writer_has_own {
+                crate::writer::preserved::merge_rels(
+                    &write_worksheet_rels(
+                        sheet,
+                        ids.drawing_id,
+                        ids.comments_id,
+                        &table_relationship_ids,
+                    ),
+                    preserved,
+                    &rels_path,
+                )
+                .0
+            } else {
+                // The writer would skip this part entirely, which is exactly the case for a
+                // loaded sheet whose only relationship is to a pivot table: without the
+                // preserved relationship there is nowhere for it to live.
+                crate::writer::preserved::rels_from_preserved(preserved, &rels_path)
+                    .unwrap_or_default()
+            };
+            writestr(archive, &rels_path, rels.as_bytes())?;
         }
 
         if has_drawings {

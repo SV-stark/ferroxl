@@ -126,13 +126,18 @@ pub fn capture(bytes: &[u8], worksheet_paths: &[String]) -> PreservedParts {
             }
             continue;
         }
-        if is_writer_owned(name) {
-            continue;
-        }
+        // `.rels` first, and unconditionally. The writer owns the *part* a `.rels` describes --
+        // `xl/_rels/workbook.xml.rels`, `xl/worksheets/_rels/sheet1.xml.rels` -- and will write
+        // its own version of both. But the relationships *inside* them are how a preserved part
+        // is reached, and skipping them because the part is the writer's is precisely how a
+        // pivot cache ends up on disk with nothing pointing at it.
         if name.ends_with(".rels") {
             if let Some(relationships) = parse_relationships(&data) {
                 preserved.add_relationships(name.clone(), relationships);
             }
+            continue;
+        }
+        if is_writer_owned(name) {
             continue;
         }
         if name == "xl/vbaProject.bin" {
