@@ -77,6 +77,23 @@ function Test-Published {
     }
 }
 
+function Test-CargoCredential {
+    <#
+    .SYNOPSIS
+        Whether cargo can authenticate against crates.io without being told a token.
+    #>
+    if ($env:CARGO_REGISTRY_TOKEN) {
+        return $true
+    }
+    $home = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME '.cargo' }
+    $file = Join-Path $home 'credentials.toml'
+    if (-not (Test-Path $file)) {
+        return $false
+    }
+    # The value is never read, only whether a token line exists.
+    return [bool](Select-String -Path $file -Pattern '^\s*token\s*=' -Quiet)
+}
+
 # -- Publish ---------------------------------------------------------------------------------
 
 $crates = @('ferroxl', 'ferroxl-mcp')
@@ -95,8 +112,11 @@ if ($DryRun) {
     exit 0
 }
 
-if (-not $env:CARGO_REGISTRY_TOKEN) {
-    throw "CARGO_REGISTRY_TOKEN is not set. Create a token at https://crates.io/settings/tokens with the 'publish:new' scope for the ferroxl-2 organisation, then set it in this session: `$env:CARGO_REGISTRY_TOKEN = '<token>'"
+# Cargo reads a token from the environment or from `<CARGO_HOME>/credentials.toml`. Checking
+# only the environment reported "no token" on a machine that had one on disk, which is worse
+# than not checking: it sends the reader off to create a second token they do not need.
+if (-not (Test-CargoCredential)) {
+    throw "No crates.io credential found. Create a token at https://crates.io/settings/tokens with the 'publish:new' scope for the ferroxl-2 organisation, then either run 'gh secret set CARGO_REGISTRY_TOKEN --repo SV-stark/ferroxl' for CI, or set `$env:CARGO_REGISTRY_TOKEN for this session."
 }
 
 foreach ($crate in $crates) {
