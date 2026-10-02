@@ -10,7 +10,15 @@ Status key: **shipped**, **next**, **later**, **declined**, **partial**.
 
 ## 1. Formula evaluation (`workbook.recalculate()`)
 
-**Status: later.** The single most-requested gap, and the hardest to do honestly.
+**Status: done, as a deliberate subset.** Implemented in 0.1.6. This entry is kept because
+the reasoning below still governs what is *missing*, which is most of the interesting
+functions.
+
+What shipped is the part that can be made correct: the operators, `SUM`, `AVERAGE`, `MIN`,
+`MAX`, `COUNT`, `COUNTA`, `PRODUCT`, `ROUND`/`ROUNDUP`/`ROUNDDOWN`, `ABS`, `INT`, `SIGN`,
+`SQRT`, `MOD`, `POWER`, `IF`, `IFERROR`, `AND`/`OR`/`NOT`, and the common text functions.
+`VLOOKUP`, `XLOOKUP`, `INDEX` and `MATCH` are still absent, for the reasons given below, and a
+formula naming one comes back *unresolved* rather than with a plausible number.
 
 ### What it would take
 

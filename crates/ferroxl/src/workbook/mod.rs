@@ -6,13 +6,15 @@
 
 use chrono::{NaiveDateTime, NaiveTime};
 
-use crate::cell::cell::CellContext;
+use crate::cell::cell::{CellContext, CellValue};
 use crate::date_time::{BaseDate, CALENDAR_MAC_1904, CALENDAR_WINDOWS_1900};
 use crate::exceptions::{Error, Result};
 use crate::formatting::StyleProperties;
+use crate::formula::eval::{Recalculation, Unresolved, ValueSource};
 use crate::namedrange::{DefinedName, NamedRange};
 use crate::styles::style::Style;
 use crate::worksheet::Worksheet;
+use std::collections::BTreeMap;
 
 /// High-level document properties.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -501,6 +503,106 @@ impl Workbook {
         self.named_styles.add(style)
     }
 
+    /// Evaluate every formula in the workbook and record the values.
+    ///
+    /// This is opt-in and it is never silent:
+    ///
+    /// - A formula that cannot be evaluated gets **no** cached value, and appears in
+    ///   [`Recalculation::unresolved`] with the reason. Nothing is guessed.
+    /// - `calcPr/@fullCalcOnLoad` is set, so Excel recomputes the whole workbook when the file
+    ///   is opened. These values are a convenience for readers that are not Excel; a mistake
+    ///   here cannot survive being opened and saved by a human.
+    /// - Formulas are evaluated in one pass over reading order, which means a formula reading
+    ///   another formula's cell sees it as blank. That is a visible gap, not a wrong number,
+    ///   and [`Worksheet::trace_precedents`] provides the order to do it properly.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ferroxl::{CellValue, Workbook};
+    /// let mut workbook = Workbook::new();
+    /// let sheet = workbook.active_sheet_mut().unwrap();
+    /// sheet.set("A1", CellValue::number(2.0)).unwrap();
+    /// sheet.set("A2", CellValue::number(3.0)).unwrap();
+    /// sheet.set("A3", CellValue::formula("=SUM(A1:A2)")).unwrap();
+    ///
+    /// let report = workbook.recalculate();
+    /// assert_eq!(report.computed_count(), 1);
+    /// assert_eq!(workbook.active_sheet().unwrap().cached_value("A3"), Some(&CellValue::Number(5.0)));
+    /// ```
+    pub fn recalculate(&mut self) -> Recalculation {
+        let mut report = Recalculation::default();
+        // Every sheet's values are visible to every formula, so the whole workbook is the
+        // scope. Building it once keeps a formula over ten thousand rows from re-reading it.
+        let index: BTreeMap<String, usize> = self
+            .worksheets
+            .iter()
+            .enumerate()
+            .map(|(at, sheet)| (sheet.title.clone(), at))
+            .collect();
+        let snapshot: Vec<BTreeMap<String, CellValue>> = self
+            .worksheets
+            .iter()
+            .map(|sheet| {
+                sheet
+                    .cells()
+                    .map(|cell| (cell.coordinate(), cell.internal_value().clone()))
+                    .collect()
+            })
+            .collect();
+
+        let source = Snapshot {
+            values: &snapshot,
+            titles: &index,
+        };
+
+        for sheet in self.worksheets.iter_mut() {
+            let title = sheet.title.clone();
+            let formulas: Vec<(String, String)> = sheet
+                .cells()
+                .filter_map(|cell| match cell.internal_value() {
+                    CellValue::Formula(text) => Some((cell.coordinate(), text.to_string())),
+                    _ => None,
+                })
+                .collect();
+
+            let mut computed = BTreeMap::new();
+            for (coordinate, formula) in formulas {
+                match crate::formula::eval::evaluate(&formula, &title, &source) {
+                    Ok(value) => {
+                        sheet.set_cached_value(&coordinate, value.clone());
+                        computed.insert(coordinate, value);
+                    }
+                    Err(reason) => {
+                        // Any value this cell had is now stale, so it goes rather than staying
+                        // to be read as though it were current.
+                        sheet.clear_cached_value(&coordinate);
+                        report.unresolved.push(Unresolved {
+                            sheet: title.clone(),
+                            coordinate,
+                            formula,
+                            reason,
+                        });
+                    }
+                }
+            }
+            if !computed.is_empty() {
+                report.computed.insert(title, computed);
+            }
+        }
+
+        // Excel recomputes on open, so a value this method got wrong is corrected before anyone
+        // sees it in Excel -- and never written back.
+        self.calculation.full_calc_on_load = Some(true);
+        report
+    }
+
+    /// The value computed for a formula cell, if `recalculate` has produced one.
+    pub fn cached_value(&self, sheet: &str, coordinate: &str) -> Option<&CellValue> {
+        let at = self.get_index(sheet)?;
+        self.worksheets.get(at)?.cached_value(coordinate)
+    }
+
     /// The sheet with this title, if there is one.
     pub fn get_sheet_by_name(&self, name: &str) -> Option<&Worksheet> {
         self.worksheets.iter().find(|sheet| sheet.title() == name)
@@ -663,10 +765,34 @@ impl Workbook {
     }
 }
 
+/// Reads cells for [`Workbook::recalculate`].
+///
+/// A snapshot rather than the live workbook, because evaluation must not see a value this same
+/// pass has already written -- otherwise the order formulas happen to be visited in would
+/// decide their answers, which is the one thing a spreadsheet must never do.
+struct Snapshot<'a> {
+    values: &'a [BTreeMap<String, CellValue>],
+    titles: &'a BTreeMap<String, usize>,
+}
+
+impl ValueSource for Snapshot<'_> {
+    fn cell(&self, sheet: &str, coordinate: &str) -> CellValue {
+        let at = match self.titles.get(sheet) {
+            Some(at) => *at,
+            // A reference to a sheet that is not there is `#REF!`, which is what Excel shows.
+            None => return CellValue::Error("#REF!".to_string()),
+        };
+        self.values
+            .get(at)
+            .and_then(|cells| cells.get(coordinate))
+            .cloned()
+            .unwrap_or(CellValue::None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::cell::CellValue;
     use chrono::NaiveDate;
 
     #[test]

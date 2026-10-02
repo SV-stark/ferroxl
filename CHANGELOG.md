@@ -31,6 +31,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   worksheet has no way to reach the workbook's style list.
 - **`Workbook::add_named_style`**, and `Workbook::named_style_names`.
 
+- **`Workbook::recalculate()`**, so a saved workbook carries values instead of blanks. Opt-in,
+  and never silent: a formula it cannot evaluate gets no cached value at all and is named in
+  `Recalculation::unresolved` with the reason. `calcPr/@fullCalcOnLoad` is set so Excel
+  recomputes on open, which is what stops a mistake here from persisting.
+- **`formula::eval`**: a tokenizer and recursive-descent parser for Excel's precedence,
+  including the `-2^2 = 4` case and `%` as a postfix operator. 31 functions -- the arithmetic
+  and comparison operators, `SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `COUNTA`, `PRODUCT`, the
+  rounding family, `IF`, `IFERROR`, `AND`/`OR`/`NOT`, and the common text functions. `supports`
+  answers whether a function is handled, and a test asserts the list matches the dispatcher, so
+  a name cannot be advertised without being implemented.
+- **`Worksheet::cached_value` / `set_cached_value`**, the `<v>` half of a formula cell, read on
+  load and written on save with the right `t` attribute (`str`, `b`, or `e` -- not the
+  shared-string `s` a literal uses, because a computed string is not in the string table).
+
+
 ### Fixed
 
 - **A sheet could vanish with no error at all.** `detect_worksheets` built the part name by

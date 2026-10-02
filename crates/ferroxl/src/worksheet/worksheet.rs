@@ -47,6 +47,12 @@ pub struct Worksheet {
     pub relationships: Vec<Relationship>,
     /// The Excel tables (ListObjects) defined on this sheet.
     pub tables: crate::worksheet::table::TableList,
+    /// Values computed for formula cells, keyed by coordinate.
+    ///
+    /// A formula's own text is what `<f>` holds and its value is what `<v>` holds, so the two
+    /// have to live apart. This is the `<v>` half: empty unless [`crate::Workbook::recalculate`]
+    /// has filled it in, and read back from a file that already had one.
+    cached_formula_values: BTreeMap<String, CellValue>,
     /// Data validations.
     pub data_validations: Vec<DataValidation>,
     /// The selected cell.
@@ -145,6 +151,7 @@ impl Worksheet {
         };
         let worksheet = Worksheet {
             title: String::new(),
+            cached_formula_values: BTreeMap::new(),
             row_dimensions: BTreeMap::new(),
             column_dimensions: BTreeMap::new(),
             page_breaks: Vec::new(),
@@ -294,6 +301,34 @@ impl Worksheet {
     /// Set a cell's value from a display value such as a string or number.
     pub fn set(&mut self, coordinate: &str, value: impl Into<CellValue>) -> Result<()> {
         self.set_cell_value(coordinate, value)
+    }
+
+    /// The value computed for a formula cell, if one has been computed.
+    ///
+    /// This is what openpyxl's `data_only=True` returns and what a reader sees until it
+    /// recalculates. It is `None` for a formula nobody has evaluated, which is the honest state:
+    /// a reader knows it has to recalculate, and nothing is silently believed.
+    pub fn cached_value(&self, coordinate: &str) -> Option<&CellValue> {
+        self.cached_formula_values.get(coordinate)
+    }
+
+    /// Record the value computed for a formula cell.
+    ///
+    /// Clearing it is a real operation rather than a no-op: a stale value left behind after a
+    /// formula changes is exactly the failure this whole module is built to avoid.
+    pub fn set_cached_value(&mut self, coordinate: &str, value: CellValue) {
+        self.cached_formula_values
+            .insert(coordinate.to_string(), value);
+    }
+
+    /// Forget a formula cell's computed value, so the next save writes no `<v>` for it.
+    pub fn clear_cached_value(&mut self, coordinate: &str) {
+        self.cached_formula_values.remove(coordinate);
+    }
+
+    /// Every computed value on this sheet, by coordinate.
+    pub fn cached_values(&self) -> &BTreeMap<String, CellValue> {
+        &self.cached_formula_values
     }
 
     /// An unordered iterator over the sheet's cells.

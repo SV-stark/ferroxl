@@ -300,6 +300,18 @@ impl WorksheetParser<'_, '_> {
             },
         };
 
+        // A formula cell's `<v>` is its cached result. It has to be taken *before* the
+        // reassignment below, which is what turns `value` into the formula the caller asked
+        // for -- and it is kept even then, because that result is what `recalculate` produced
+        // and dropping it here would make every recalculated workbook lose its values on the
+        // way back in.
+        let cached_for_formula =
+            if formula.is_some() && !self.context.data_only && !raw_value.is_empty() {
+                Some(value.clone())
+            } else {
+                None
+            };
+
         if formula.is_some() && !self.context.data_only {
             let text = formula
                 .and_then(|node| node.text.clone())
@@ -338,6 +350,9 @@ impl WorksheetParser<'_, '_> {
         } else {
             // Type guessing infers from the text, which is what `set_value` does.
             cell.set_value(value, context);
+        }
+        if let Some(cached) = cached_for_formula {
+            self.worksheet.set_cached_value(coordinate, cached);
         }
         Ok(())
     }

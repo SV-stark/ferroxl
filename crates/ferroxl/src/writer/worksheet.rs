@@ -343,6 +343,21 @@ fn write_cols(
     Ok(())
 }
 
+/// The `t` attribute a formula cell's cached value needs, if any.
+///
+/// `None` means no attribute, which is the numeric case: that is what a reader assumes without
+/// being told. The other three are spelled differently from their non-formula counterparts --
+/// notably a formula's text result is `str`, not the shared-string `s` a literal uses, because a
+/// computed string was never put in the string table.
+fn cached_value_type(value: &CellValue) -> Option<&'static str> {
+    match value {
+        CellValue::Bool(_) => Some("b"),
+        CellValue::Text(_) => Some("str"),
+        CellValue::Error(_) => Some("e"),
+        _ => None,
+    }
+}
+
 /// Format a float for XML: integral values lose the decimal point, as Python's `str` does.
 fn format_number(value: f64) -> String {
     if value == value.trunc() {
@@ -431,6 +446,14 @@ pub fn write_row(
             vec![("r".to_string(), coordinate.clone())];
         if cell.data_type != DataType::Formula {
             cell_attributes.push(("t".to_string(), cell.data_type.as_str().to_string()));
+        } else if let Some(kind) = worksheet
+            .cached_value(&coordinate)
+            .and_then(cached_value_type)
+        {
+            // A formula's `<v>` holds a number unless told otherwise, so a text, boolean or
+            // error result has to say which it is. Without this the reader would read the
+            // cached value as a number and get something else entirely.
+            cell_attributes.push(("t".to_string(), kind.to_string()));
         }
         if worksheet.has_style(&coordinate) {
             if let Some(id) = style_tables.id_for(&worksheet.get_style(&coordinate)) {
@@ -475,7 +498,40 @@ pub fn write_row(
                     let body = body.strip_prefix('=').unwrap_or(body).to_string();
                     doc.tag("f", [] as [(&str, &str); 0], Some(&body));
                 }
-                doc.tag("v", [] as [(&str, &str); 0], None);
+                // The value half of a formula cell. Excel writes an empty `<v/>` when it has nothing cached,
+                // and so did this until `recalculate` gave the field somewhere to go. The `t`
+                // attribute on the `<c>` is what tells a reader which of the four storages the
+                // text in `<v>` belongs to, so it has to be set here rather than on the cell.
+                match worksheet.cached_value(&coordinate) {
+                    None => {
+                        doc.tag("v", [] as [(&str, &str); 0], None);
+                    }
+                    Some(CellValue::Number(number)) => {
+                        doc.tag(
+                            "v",
+                            [] as [(&str, &str); 0],
+                            Some(&crate::xml::functions::repr_float(*number)),
+                        );
+                    }
+                    Some(CellValue::Bool(flag)) => {
+                        doc.tag(
+                            "v",
+                            [] as [(&str, &str); 0],
+                            Some(if *flag { "1" } else { "0" }),
+                        );
+                    }
+                    Some(CellValue::Text(text)) => {
+                        doc.tag("v", [] as [(&str, &str); 0], Some(text));
+                    }
+                    Some(CellValue::Error(code)) => {
+                        doc.tag("v", [] as [(&str, &str); 0], Some(code));
+                    }
+                    Some(_) => {
+                        // A blank or a date has no formula-cell representation this writer
+                        // produces, so nothing is written rather than something misleading.
+                        doc.tag("v", [] as [(&str, &str); 0], None);
+                    }
+                }
             }
             DataType::Numeric => match value {
                 CellValue::Number(number) => {

@@ -319,6 +319,23 @@ dimension correctly, so the divergence only shows on a hand-edited or corrupt fi
 `highest_row` and `highest_column` come from the dimension tables rather than the stored
 element, so they move with the cells.
 
+### Formula evaluation
+
+`openpyxl` has no formula engine and neither does ferroxl, in the sense that matters: neither
+computes a value the way Excel does when you save. What ferroxl now has is
+`Workbook::recalculate`, which evaluates a subset and writes the result into `<v>` so that a
+reader which is not Excel sees a number instead of a blank.
+
+The differences from a full engine are the point rather than a gap to be apologised for:
+
+- A formula it cannot evaluate gets **no** value and is listed in `Recalculation::unresolved`
+  with a reason. `VLOOKUP` is not approximated.
+- Formulas are evaluated in one pass, so a formula reading another formula's cell sees it as
+  blank rather than as its stale value. `Worksheet::trace_precedents` gives the order to fix
+  this properly.
+- `calcPr/@fullCalcOnLoad` is set, so Excel recomputes on open and a wrong value here cannot
+  survive a human opening and saving the file.
+
 ### 5. Zip central directory repair
 
 **Resolved.** This entry was wrong in both directions, and measuring it is what showed that.
