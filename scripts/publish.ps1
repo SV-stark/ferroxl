@@ -31,11 +31,14 @@ $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
 function Invoke-Cargo {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
-    Write-Host "cargo $($Args -join ' ')" -ForegroundColor DarkGray
-    & cargo @Args
+    # The parameter is not named `$Args`: that is PowerShell's automatic variable for
+    # unbound arguments, and declaring a parameter by that name makes every `-flag` after
+    # the cargo subcommand look like a parameter of this function instead.
+    param([Parameter(Position = 0, ValueFromRemainingArguments = $true)][string[]]$CargoArgs)
+    Write-Host "cargo $($CargoArgs -join ' ')" -ForegroundColor DarkGray
+    & cargo @CargoArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo $($Args -join ' ') failed with exit code $LASTEXITCODE"
+        throw "cargo $($CargoArgs -join ' ') failed with exit code $LASTEXITCODE"
     }
 }
 
