@@ -99,7 +99,7 @@ pub use reader::{load_workbook, load_workbook_from_bytes, LoadOptions};
 pub use styles::{Alignment, Border, Borders, Color, Fill, Font, NumberFormat, Protection, Style};
 pub use workbook::{DocumentProperties, DocumentSecurity, Workbook};
 pub use worksheet::{AutoFilter, HeaderFooter, PageMargins, PageSetup, SheetProtection, Worksheet};
-pub use writer::{save_workbook, save_workbook_to, ExcelWriter};
+pub use writer::{save_dump, save_workbook, save_workbook_to, DumpWorksheet, ExcelWriter};
 
 /// The ferroxl version, matching the openpyxl release it ports.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

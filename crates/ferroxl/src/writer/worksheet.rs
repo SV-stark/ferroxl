@@ -18,14 +18,55 @@ use crate::xml::functions::{fromstring, Element, XmlWriter};
 
 /// Serialise a worksheet to its XML part.
 ///
-/// `string_table` maps cell text to its shared-string index, and `style_ids` maps styles to
-/// their `cellXfs` index.
+/// `string_table` maps cell text to its shared-string index, and `style_tables` maps styles
+/// to their `cellXfs` index.
+///
+/// This is the in-memory writer: it builds the whole part as a `String`. `save_dump` is the
+/// streaming counterpart, for a sheet large enough that holding its XML matters. The two
+/// produce identical bytes, which a test asserts.
 pub fn write_worksheet(
     worksheet: &Worksheet,
     string_table: &crate::writer::strings::StringTable,
     style_tables: &StyleTables,
 ) -> Result<String> {
     let mut doc = XmlWriter::new();
+    write_worksheet_head(&mut doc, worksheet, style_tables)?;
+    write_sheet_rows(&mut doc, worksheet, string_table, style_tables)?;
+    write_worksheet_tail(&mut doc, worksheet)?;
+    Ok(doc.into_string())
+}
+
+/// The head of a worksheet part as a string, for the streaming writer.
+///
+/// A thin wrapper over [`write_worksheet_head`]. The head is bounded by the sheet's
+/// configuration rather than by its cell count, so buffering it costs nothing that matters.
+pub fn write_worksheet_head_to_string(
+    worksheet: &Worksheet,
+    style_tables: &StyleTables,
+) -> Result<String> {
+    let mut doc = XmlWriter::new();
+    write_worksheet_head(&mut doc, worksheet, style_tables)?;
+    Ok(doc.into_string())
+}
+
+/// The tail of a worksheet part as a string, from `</sheetData>` to the end.
+pub fn write_worksheet_tail_to_string(worksheet: &Worksheet) -> Result<String> {
+    let mut doc = XmlWriter::new();
+    write_worksheet_tail(&mut doc, worksheet)?;
+    Ok(doc.into_string())
+}
+
+/// Write everything up to and including the opening `<sheetData>`.
+///
+/// The part is split there and after the rows so the streaming writer can reuse both halves
+/// unchanged. Neither grows with the size of the sheet's data: the head holds the
+/// dimensions, the view and the column definitions, and the tail holds the merges,
+/// validations and conditional formats.
+fn write_worksheet_head(
+    doc: &mut XmlWriter,
+    worksheet: &Worksheet,
+    style_tables: &StyleTables,
+) -> Result<()> {
     doc.start_tag(
         "worksheet",
         [
@@ -67,11 +108,24 @@ pub fn write_worksheet(
 
     let dimension = worksheet.calculate_dimension()?;
     doc.tag("dimension", [("ref", &dimension)], None);
-    write_sheet_views(&mut doc, worksheet);
+    write_sheet_views(doc, worksheet);
     doc.tag("sheetFormatPr", [("defaultRowHeight", "15")], None);
-    write_cols(&mut doc, worksheet, style_tables)?;
-    write_sheet_data(&mut doc, worksheet, string_table, style_tables)?;
+    write_cols(doc, worksheet, style_tables)?;
+    doc.start_tag("sheetData", [] as [(&str, &str); 0]);
+    Ok(())
+}
 
+/// Write everything after `</sheetData>`, and close the worksheet element.
+///
+/// `vba_root` is the sheet's original XML, kept from the head because a VBA workbook needs
+/// the same parse for the code name and for the legacy drawing reference. Parsing the part
+/// twice to avoid passing one value between two functions would cost more than it saves.
+fn write_worksheet_tail(doc: &mut XmlWriter, worksheet: &Worksheet) -> Result<()> {
+    doc.end_tag("sheetData");
+    let vba_root = match &worksheet.xml_source {
+        Some(source) => fromstring(source).ok(),
+        None => None,
+    };
     if worksheet.protection.enabled {
         let mut attributes = vec![("objects", "1"), ("scenarios", "1"), ("sheet", "1")];
         if !worksheet.protection.password().is_empty() {
@@ -80,11 +134,11 @@ pub fn write_worksheet(
         doc.tag("sheetProtection", attributes, None);
     }
 
-    write_auto_filter(&mut doc, worksheet);
-    write_merge_cells(&mut doc, worksheet);
-    write_data_validations(&mut doc, worksheet);
-    write_hyperlinks(&mut doc, worksheet);
-    write_conditional_formatting(&mut doc, worksheet);
+    write_auto_filter(doc, worksheet);
+    write_merge_cells(doc, worksheet);
+    write_data_validations(doc, worksheet);
+    write_hyperlinks(doc, worksheet);
+    write_conditional_formatting(doc, worksheet);
 
     let options = worksheet.page_setup.option_attributes();
     if !options.is_empty() {
@@ -166,7 +220,7 @@ pub fn write_worksheet(
     }
     doc.end_tag("worksheet");
     doc.end_document();
-    Ok(doc.into_string())
+    Ok(())
 }
 
 fn bool_str(value: bool) -> &'static str {
@@ -294,16 +348,12 @@ fn format_number(value: f64) -> String {
     }
 }
 
-fn write_sheet_data(
-    doc: &mut XmlWriter,
-    worksheet: &Worksheet,
-    string_table: &crate::writer::strings::StringTable,
-    style_tables: &StyleTables,
-) -> Result<()> {
-    doc.start_tag("sheetData", [] as [(&str, &str); 0]);
-    let max_column = worksheet.highest_column();
-
-    // Group cells by row, preserving insertion order within a row and sorting by column.
+/// Group a sheet's cells into rows, in column order within each row.
+///
+/// A worksheet stores cells by coordinate, and `"A10"` sorts before `"A2"`, so iteration
+/// order is not row order. The rows come out ascending and the cells within each row
+/// left to right, which is the order the schema wants.
+pub fn group_rows(worksheet: &Worksheet) -> Vec<(u32, Vec<&Cell>)> {
     let mut by_row: BTreeMap<u32, Vec<&Cell>> = BTreeMap::new();
     for cell in worksheet.cells() {
         by_row.entry(cell.row).or_default().push(cell);
@@ -311,115 +361,145 @@ fn write_sheet_data(
     for cells in by_row.values_mut() {
         cells.sort_by_key(|cell| column_index_from_string(&cell.column).unwrap_or(0));
     }
+    by_row.into_iter().collect()
+}
 
-    for (row_index, cells) in &by_row {
-        let row_dimension = worksheet
-            .row_dimensions
-            .get(row_index)
-            .cloned()
-            .unwrap_or_else(|| crate::worksheet::RowDimension::new(*row_index));
-        let mut attributes: Vec<(String, String)> = vec![
-            ("r".to_string(), row_index.to_string()),
-            ("spans".to_string(), format!("1:{max_column}")),
-        ];
-        if !row_dimension.visible {
-            attributes.push(("hidden".to_string(), "1".to_string()));
+fn write_sheet_rows(
+    doc: &mut XmlWriter,
+    worksheet: &Worksheet,
+    string_table: &crate::writer::strings::StringTable,
+    style_tables: &StyleTables,
+) -> Result<()> {
+    let max_column = worksheet.highest_column();
+    for (row_index, cells) in group_rows(worksheet) {
+        write_row(
+            doc,
+            row_index,
+            &cells,
+            worksheet,
+            string_table,
+            style_tables,
+            max_column,
+        )?;
+    }
+    Ok(())
+}
+
+/// Write one `<row>` element and the cells in it.
+pub fn write_row(
+    doc: &mut XmlWriter,
+    row_index: u32,
+    cells: &[&Cell],
+    worksheet: &Worksheet,
+    string_table: &crate::writer::strings::StringTable,
+    style_tables: &StyleTables,
+    max_column: u32,
+) -> Result<()> {
+    let row_dimension = worksheet
+        .row_dimensions
+        .get(&row_index)
+        .cloned()
+        .unwrap_or_else(|| crate::worksheet::RowDimension::new(row_index));
+    let mut attributes: Vec<(String, String)> = vec![
+        ("r".to_string(), row_index.to_string()),
+        ("spans".to_string(), format!("1:{max_column}")),
+    ];
+    if !row_dimension.visible {
+        attributes.push(("hidden".to_string(), "1".to_string()));
+    }
+    if row_dimension.height > 0.0 {
+        attributes.push(("ht".to_string(), format_number(row_dimension.height)));
+        attributes.push(("customHeight".to_string(), "1".to_string()));
+    }
+    let row_key = row_index.to_string();
+    if worksheet.has_style(&row_key) {
+        if let Some(id) = style_tables.id_for(&worksheet.get_style(&row_key)) {
+            attributes.push(("s".to_string(), id.0.to_string()));
+            attributes.push(("customFormat".to_string(), "1".to_string()));
         }
-        if row_dimension.height > 0.0 {
-            attributes.push(("ht".to_string(), format_number(row_dimension.height)));
-            attributes.push(("customHeight".to_string(), "1".to_string()));
+    }
+    doc.start_tag("row", attribute_refs(&attributes));
+
+    for cell in cells {
+        let coordinate = cell.coordinate();
+        let value = cell.internal_value();
+        let mut cell_attributes: Vec<(String, String)> =
+            vec![("r".to_string(), coordinate.clone())];
+        if cell.data_type != DataType::Formula {
+            cell_attributes.push(("t".to_string(), cell.data_type.as_str().to_string()));
         }
-        let row_key = row_index.to_string();
-        if worksheet.has_style(&row_key) {
-            if let Some(id) = style_tables.id_for(&worksheet.get_style(&row_key)) {
-                attributes.push(("s".to_string(), id.0.to_string()));
-                attributes.push(("customFormat".to_string(), "1".to_string()));
+        if worksheet.has_style(&coordinate) {
+            if let Some(id) = style_tables.id_for(&worksheet.get_style(&coordinate)) {
+                cell_attributes.push(("s".to_string(), id.0.to_string()));
             }
         }
-        doc.start_tag("row", attribute_refs(&attributes));
 
-        for cell in cells {
-            let coordinate = cell.coordinate();
-            let value = cell.internal_value();
-            let mut cell_attributes: Vec<(String, String)> =
-                vec![("r".to_string(), coordinate.clone())];
-            if cell.data_type != DataType::Formula {
-                cell_attributes.push(("t".to_string(), cell.data_type.as_str().to_string()));
-            }
-            if worksheet.has_style(&coordinate) {
-                if let Some(id) = style_tables.id_for(&worksheet.get_style(&coordinate)) {
-                    cell_attributes.push(("s".to_string(), id.0.to_string()));
-                }
-            }
+        if value.is_empty() {
+            doc.tag("c", attribute_refs(&cell_attributes), None);
+            continue;
+        }
 
-            if value.is_empty() {
-                doc.tag("c", attribute_refs(&cell_attributes), None);
-                continue;
+        doc.start_tag("c", attribute_refs(&cell_attributes));
+        match cell.data_type {
+            DataType::SharedString => {
+                let text = value.as_text().unwrap_or_default().to_string();
+                let index = string_table.get(&text).copied().unwrap_or(0);
+                doc.tag("v", [] as [(&str, &str); 0], Some(&index.to_string()));
             }
-
-            doc.start_tag("c", attribute_refs(&cell_attributes));
-            match cell.data_type {
-                DataType::SharedString => {
-                    let text = value.as_text().unwrap_or_default().to_string();
-                    let index = string_table.get(&text).copied().unwrap_or(0);
-                    doc.tag("v", [] as [(&str, &str); 0], Some(&index.to_string()));
-                }
-                DataType::Formula => {
-                    if let Some(attributes) = &cell.formula_attributes {
-                        let mut formula_attributes: Vec<(String, String)> = Vec::new();
-                        if let Some(formula_type) = &attributes.formula_type {
-                            formula_attributes.push(("t".to_string(), formula_type.clone()));
-                        }
-                        if let Some(si) = &attributes.si {
-                            formula_attributes.push(("si".to_string(), si.clone()));
-                        }
-                        // A shared formula with no range is written as an empty `<f/>`:
-                        // the followers inherit it from the group's master cell.
-                        let bodyless = attributes.formula_type.as_deref() == Some("shared")
-                            && attributes.reference.is_none();
-                        if bodyless {
-                            doc.tag("f", attribute_refs(&formula_attributes), None);
-                        } else {
-                            let body = value.as_text().unwrap_or_default();
-                            let body = body.strip_prefix('=').unwrap_or(body).to_string();
-                            doc.tag("f", attribute_refs(&formula_attributes), Some(&body));
-                        }
+            DataType::Formula => {
+                if let Some(attributes) = &cell.formula_attributes {
+                    let mut formula_attributes: Vec<(String, String)> = Vec::new();
+                    if let Some(formula_type) = &attributes.formula_type {
+                        formula_attributes.push(("t".to_string(), formula_type.clone()));
+                    }
+                    if let Some(si) = &attributes.si {
+                        formula_attributes.push(("si".to_string(), si.clone()));
+                    }
+                    // A shared formula with no range is written as an empty `<f/>`:
+                    // the followers inherit it from the group's master cell.
+                    let bodyless = attributes.formula_type.as_deref() == Some("shared")
+                        && attributes.reference.is_none();
+                    if bodyless {
+                        doc.tag("f", attribute_refs(&formula_attributes), None);
                     } else {
                         let body = value.as_text().unwrap_or_default();
                         let body = body.strip_prefix('=').unwrap_or(body).to_string();
-                        doc.tag("f", [] as [(&str, &str); 0], Some(&body));
+                        doc.tag("f", attribute_refs(&formula_attributes), Some(&body));
                     }
-                    doc.tag("v", [] as [(&str, &str); 0], None);
+                } else {
+                    let body = value.as_text().unwrap_or_default();
+                    let body = body.strip_prefix('=').unwrap_or(body).to_string();
+                    doc.tag("f", [] as [(&str, &str); 0], Some(&body));
                 }
-                DataType::Numeric => match value {
-                    CellValue::Number(number) => {
-                        doc.tag(
-                            "v",
-                            [] as [(&str, &str); 0],
-                            Some(&crate::xml::functions::repr_float(*number)),
-                        );
-                    }
-                    _ => {
-                        doc.tag("v", [] as [(&str, &str); 0], value.as_text());
-                    }
-                },
-                DataType::Bool => {
-                    let text = match value {
-                        CellValue::Bool(flag) => if *flag { "1" } else { "0" }.to_string(),
-                        _ => "0".to_string(),
-                    };
-                    doc.tag("v", [] as [(&str, &str); 0], Some(&text));
+                doc.tag("v", [] as [(&str, &str); 0], None);
+            }
+            DataType::Numeric => match value {
+                CellValue::Number(number) => {
+                    doc.tag(
+                        "v",
+                        [] as [(&str, &str); 0],
+                        Some(&crate::xml::functions::repr_float(*number)),
+                    );
                 }
                 _ => {
-                    let text = value.as_text().unwrap_or_default().to_string();
-                    doc.tag("v", [] as [(&str, &str); 0], Some(&text));
+                    doc.tag("v", [] as [(&str, &str); 0], value.as_text());
                 }
+            },
+            DataType::Bool => {
+                let text = match value {
+                    CellValue::Bool(flag) => if *flag { "1" } else { "0" }.to_string(),
+                    _ => "0".to_string(),
+                };
+                doc.tag("v", [] as [(&str, &str); 0], Some(&text));
             }
-            doc.end_tag("c");
+            _ => {
+                let text = value.as_text().unwrap_or_default().to_string();
+                doc.tag("v", [] as [(&str, &str); 0], Some(&text));
+            }
         }
-        doc.end_tag("row");
+        doc.end_tag("c");
     }
-    doc.end_tag("sheetData");
+    doc.end_tag("row");
     Ok(())
 }
 

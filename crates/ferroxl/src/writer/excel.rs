@@ -7,9 +7,11 @@ use zip::ZipWriter;
 
 use crate::exceptions::{Error, Result};
 use crate::workbook::Workbook;
+use crate::worksheet::Worksheet;
 use crate::writer::charts::write_any_chart;
 use crate::writer::comments::{write_comments, write_comments_vml};
 use crate::writer::drawings::{write_drawing, write_drawing_rels, write_shapes};
+use crate::writer::dump_worksheet::DumpWorksheet;
 use crate::writer::strings::{create_string_table, write_string_table, StringTable};
 use crate::writer::styles::{build_style_tables, write_style_table, StyleTables};
 use crate::writer::theme::write_theme;
@@ -42,6 +44,32 @@ pub struct ExcelWriter {
     pub string_table: StringTable,
 }
 
+/// The counters that number the drawings, charts, images and comment parts.
+///
+/// They run across the whole workbook rather than per sheet, because a sheet's charts are
+/// numbered globally in the package.
+#[derive(Debug, Default)]
+struct PartIds {
+    drawing_id: u32,
+    chart_id: u32,
+    image_id: u32,
+    shape_id: usize,
+    comments_id: u32,
+}
+
+impl PartIds {
+    /// Counters start at 1, because part names in the package are 1-based.
+    fn first() -> Self {
+        PartIds {
+            drawing_id: 1,
+            chart_id: 1,
+            image_id: 1,
+            shape_id: 1,
+            comments_id: 1,
+        }
+    }
+}
+
 impl ExcelWriter {
     /// Build a writer for a workbook, collecting its shared tables.
     pub fn new(workbook: Workbook) -> Self {
@@ -60,8 +88,21 @@ impl ExcelWriter {
         }
     }
 
-    /// Write every part of the package into `archive`.
-    pub fn write_data(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
+    /// Write every part of the package, streaming each sheet's rows.
+    ///
+    /// The parts are written in the same order as [`write_data`](Self::write_data); the
+    /// only difference is that a worksheet part is written into its zip entry as it is
+    /// produced rather than being built in memory first.
+    pub fn write_dump(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
+        self.write_package_parts(archive)?;
+        self.write_sheets_dump(archive)
+    }
+
+    /// The parts that are not worksheets: content types, rels, properties, theme, styles,
+    /// the workbook itself and the shared strings.
+    ///
+    /// None of these grows with the size of a sheet's data, so both writers share them.
+    fn write_package_parts(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
         writestr(
             archive,
             ARC_CONTENT_TYPES,
@@ -114,16 +155,17 @@ impl ExcelWriter {
             copy_vba_archive(archive, vba)?;
         }
 
+        Ok(())
+    }
+
+    /// Write every part of the package into `archive`, buffering each worksheet.
+    pub fn write_data(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
+        self.write_package_parts(archive)?;
         self.write_worksheets(archive)
     }
 
     fn write_worksheets(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
-        let mut drawing_id = 1u32;
-        let mut chart_id = 1u32;
-        let mut image_id = 1u32;
-        let mut shape_id = 1usize;
-        let mut comments_id = 1u32;
-
+        let mut ids = PartIds::first();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
             let xml = write_worksheet(sheet, &self.string_table, &self.style_tables)?;
             writestr(
@@ -131,78 +173,122 @@ impl ExcelWriter {
                 &format!("{PACKAGE_WORKSHEETS}/sheet{}.xml", index + 1),
                 xml.as_bytes(),
             )?;
+            self.write_sheet_parts(archive, sheet, index, &mut ids)?;
+        }
+        Ok(())
+    }
 
-            let has_drawings = !sheet.charts.is_empty() || !sheet.images.is_empty();
-            if has_drawings || !sheet.relationships.is_empty() || sheet.comment_count() > 0 {
-                let rels = write_worksheet_rels(sheet, drawing_id, comments_id);
-                writestr(
-                    archive,
-                    &format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1),
-                    rels.as_bytes(),
-                )?;
+    /// Write every worksheet, streaming each sheet's rows into its zip entry.
+    fn write_sheets_dump(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
+        let mut ids = PartIds::first();
+        for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
+            let name = format!("{PACKAGE_WORKSHEETS}/sheet{}.xml", index + 1);
+            archive
+                .start_file(name, SimpleFileOptions::default())
+                .map_err(|e| Error::Io(e.to_string()))?;
+            // The dump borrows the archive for the length of one sheet, so it is scoped to
+            // the sheet rather than to the loop.
+            {
+                let mut dump = DumpWorksheet::new(
+                    &mut *archive,
+                    sheet,
+                    &self.string_table,
+                    &self.style_tables,
+                );
+                dump.start()?;
+                dump.write_rows()?;
+                dump.finish()?;
             }
+            self.write_sheet_parts(archive, sheet, index, &mut ids)?;
+        }
+        Ok(())
+    }
 
-            if has_drawings {
+    /// Write everything a sheet carries besides its cells.
+    fn write_sheet_parts(
+        &self,
+        archive: &mut ZipWriter<Cursor<Vec<u8>>>,
+        sheet: &Worksheet,
+        index: usize,
+        ids: &mut PartIds,
+    ) -> Result<()> {
+        let has_drawings = !sheet.charts.is_empty() || !sheet.images.is_empty();
+        if has_drawings || !sheet.relationships.is_empty() || sheet.comment_count() > 0 {
+            let rels = write_worksheet_rels(sheet, ids.drawing_id, ids.comments_id);
+            writestr(
+                archive,
+                &format!("{PACKAGE_WORKSHEETS}/_rels/sheet{}.xml.rels", index + 1),
+                rels.as_bytes(),
+            )?;
+        }
+
+        if has_drawings {
+            writestr(
+                archive,
+                &format!("{PACKAGE_DRAWINGS}/drawing{}.xml", ids.drawing_id),
+                write_drawing(sheet).as_bytes(),
+            )?;
+            writestr(
+                archive,
+                &format!(
+                    "{PACKAGE_DRAWINGS}/_rels/drawing{}.xml.rels",
+                    ids.drawing_id
+                ),
+                write_drawing_rels(sheet, ids.chart_id, ids.image_id).as_bytes(),
+            )?;
+            ids.drawing_id += 1;
+
+            for chart in &sheet.charts {
+                let axes = chart.axes.clone();
+                let xml = write_any_chart(chart, axes.is_some(), axes.as_ref())?;
                 writestr(
                     archive,
-                    &format!("{PACKAGE_DRAWINGS}/drawing{drawing_id}.xml"),
-                    write_drawing(sheet).as_bytes(),
+                    &format!("{PACKAGE_XL}/charts/chart{}.xml", ids.chart_id),
+                    xml.as_bytes(),
                 )?;
-                writestr(
-                    archive,
-                    &format!("{PACKAGE_DRAWINGS}/_rels/drawing{drawing_id}.xml.rels"),
-                    write_drawing_rels(sheet, chart_id, image_id).as_bytes(),
-                )?;
-                drawing_id += 1;
-
-                for chart in &sheet.charts {
-                    let axes = chart.axes.clone();
-                    let xml = write_any_chart(chart, axes.is_some(), axes.as_ref())?;
+                if !chart.shapes.is_empty() {
                     writestr(
                         archive,
-                        &format!("{PACKAGE_XL}/charts/chart{chart_id}.xml"),
-                        xml.as_bytes(),
+                        &format!("{PACKAGE_XL}/charts/_rels/chart{}.xml.rels", ids.chart_id),
+                        crate::writer::charts::write_chart_rels(ids.drawing_id).as_bytes(),
                     )?;
-                    if !chart.shapes.is_empty() {
-                        writestr(
-                            archive,
-                            &format!("{PACKAGE_XL}/charts/_rels/chart{chart_id}.xml.rels"),
-                            crate::writer::charts::write_chart_rels(drawing_id).as_bytes(),
-                        )?;
-                        writestr(
-                            archive,
-                            &format!("{PACKAGE_DRAWINGS}/drawing{drawing_id}.xml"),
-                            write_shapes(&chart.shapes, shape_id).as_bytes(),
-                        )?;
-                        shape_id += chart.shapes.len();
-                        drawing_id += 1;
-                    }
-                    chart_id += 1;
-                }
-
-                for image in &sheet.images {
                     writestr(
                         archive,
-                        &format!("{PACKAGE_IMAGES}/image{image_id}.{}", image.extension()),
-                        &image.data,
+                        &format!("{PACKAGE_DRAWINGS}/drawing{}.xml", ids.drawing_id),
+                        write_shapes(&chart.shapes, ids.shape_id).as_bytes(),
                     )?;
-                    image_id += 1;
+                    ids.shape_id += chart.shapes.len();
+                    ids.drawing_id += 1;
                 }
+                ids.chart_id += 1;
             }
 
-            if sheet.comment_count() > 0 {
+            for image in &sheet.images {
                 writestr(
                     archive,
-                    &format!("{PACKAGE_XL}/comments{comments_id}.xml"),
-                    write_comments(sheet).as_bytes(),
+                    &format!(
+                        "{PACKAGE_IMAGES}/image{}.{}",
+                        ids.image_id,
+                        image.extension()
+                    ),
+                    &image.data,
                 )?;
-                writestr(
-                    archive,
-                    &format!("{PACKAGE_DRAWINGS}/commentsDrawing{comments_id}.vml"),
-                    write_comments_vml(sheet)?.as_bytes(),
-                )?;
-                comments_id += 1;
+                ids.image_id += 1;
             }
+        }
+
+        if sheet.comment_count() > 0 {
+            writestr(
+                archive,
+                &format!("{PACKAGE_XL}/comments{}.xml", ids.comments_id),
+                write_comments(sheet).as_bytes(),
+            )?;
+            writestr(
+                archive,
+                &format!("{PACKAGE_DRAWINGS}/commentsDrawing{}.vml", ids.comments_id),
+                write_comments_vml(sheet)?.as_bytes(),
+            )?;
+            ids.comments_id += 1;
         }
         Ok(())
     }
@@ -275,6 +361,27 @@ pub fn save_virtual_workbook(workbook: Workbook) -> Result<Vec<u8>> {
 pub fn save_workbook_to(workbook: Workbook, mut sink: impl Write) -> Result<()> {
     let bytes = save_virtual_workbook(workbook)?;
     sink.write_all(&bytes)?;
+    Ok(())
+}
+
+/// Write a workbook, streaming each sheet's rows instead of buffering the part.
+///
+/// This is openpyxl's `save_dump`. The difference from [`save_workbook_to`] is where the
+/// memory goes: that one builds each worksheet's whole XML in a `String` before handing it
+/// to the archive, this one writes the head, then each row as it is produced, then the tail.
+/// Peak memory is set by the largest row rather than by the largest sheet, which is the
+/// difference that matters for a hundred-thousand-row export.
+///
+/// The bytes are identical either way — `dump_and_buffered_agree` asserts that — because a
+/// second writer that produced different XML would be a liability, not a feature.
+pub fn save_dump(workbook: Workbook, mut sink: impl Write) -> Result<()> {
+    let mut archive = ZipWriter::new(Cursor::new(Vec::new()));
+    // The zip entry has to be started before the rows can be written into it, so the row
+    // loop owns the archive rather than the other way round.
+    let writer = ExcelWriter::new(workbook);
+    writer.write_dump(&mut archive)?;
+    let cursor = archive.finish().map_err(|e| Error::Io(e.to_string()))?;
+    sink.write_all(&cursor.into_inner())?;
     Ok(())
 }
 
