@@ -30,15 +30,16 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')
 
-function Invoke-Cargo {
-    # The parameter is not named `$Args`: that is PowerShell's automatic variable for
-    # unbound arguments, and declaring a parameter by that name makes every `-flag` after
-    # the cargo subcommand look like a parameter of this function instead.
-    param([Parameter(Position = 0, ValueFromRemainingArguments = $true)][string[]]$CargoArgs)
-    Write-Host "cargo $($CargoArgs -join ' ')" -ForegroundColor DarkGray
-    & cargo @CargoArgs
+function Invoke-Native {
+    # The argument list is passed as one array and splatted, rather than as trailing
+    # `ValueFromRemainingArguments`. PowerShell tries to bind anything starting with a
+    # dash against the function's own parameters first, so `cargo publish -p ferroxl`
+    # became an ambiguity error about `-ProgressAction` before cargo ever ran.
+    param([Parameter(Position = 0)][string]$Exe, [Parameter(Position = 1)][string[]]$NativeArgs)
+    Write-Host "$Exe $($NativeArgs -join ' ')" -ForegroundColor DarkGray
+    & $Exe @NativeArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo $($CargoArgs -join ' ') failed with exit code $LASTEXITCODE"
+        throw "$Exe $($NativeArgs -join ' ') failed with exit code $LASTEXITCODE"
     }
 }
 
@@ -87,7 +88,7 @@ foreach ($crate in $crates) {
 }
 
 if ($DryRun) {
-    Invoke-Cargo publish -p $crates[0] --dry-run --locked
+    Invoke-Native 'cargo' @('publish', '-p', $crates[0], '--dry-run', '--locked')
     Write-Host ""
     Write-Host "dry run: $version packaged and verified for $($crates[0])." -ForegroundColor Yellow
     Write-Host "$($crates[1]) cannot be dry-run until $($crates[0]) $version is on the registry - that check is the point of the sequencing, not a defect." -ForegroundColor Yellow
@@ -99,7 +100,7 @@ if (-not $env:CARGO_REGISTRY_TOKEN) {
 }
 
 foreach ($crate in $crates) {
-    Invoke-Cargo publish -p $crate --locked
+    Invoke-Native 'cargo' @('publish', '-p', $crate, '--locked')
 
     if ($crate -eq $crates[0]) {
         # The registry publishes the version before its index entry is readable, and
