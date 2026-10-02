@@ -400,7 +400,7 @@ Python-only infrastructure with no Rust counterpart, or a counterpart that is wo
 | `worksheet/iter_worksheet.py::IterableWorksheet`, `ROW_TAG`, `CELL_TAG`, `VALUE_TAG`, `FORMULA_TAG`, `DIMENSION_TAG` | The streaming worksheet class and its module-private tag constants. lexcel's `ReadOnlyCell` and `ReadOnlyTables` give the same access, and the reader matches tag names at run time. |
 | `charts/series.py::Serie` | A backwards-compatibility alias for `Series`. |
 | `worksheet/worksheet.py::flatten` | A Python 2 leftover; it takes one argument and returns it. |
-| `benchmarks/`, `sample/`, `tests/` | Python's own. lexcel has its own tests, 480 of them. |
+| `benchmarks/`, `sample/`, `tests/` | Python's own. lexcel has its own tests, 481 of them. |
 
 ## How parity is verified
 
@@ -428,5 +428,5 @@ and `set_header_footer` bugs were found this way, not by unit tests.
 lexcel's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
-The suite is 480 tests — 368 in the library, 110 in the MCP server, two doctests — and
+The suite is 481 tests — 369 in the library, 110 in the MCP server, two doctests — and
 `cargo build`, `cargo clippy` and `cargo fmt --check` are all clean.

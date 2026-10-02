@@ -35,9 +35,12 @@
 //! use lexcel::{CellValue, Style, Workbook};
 //!
 //! let mut workbook = Workbook::new();
-//! workbook.create_sheet(Some("Summary"))?;
 //!
-//! let sheet = workbook.active_sheet_mut()?;
+//! // `Workbook::new()` already made `Sheet1`, and `create_sheet` appends without
+//! // making the new sheet active, so take the index it returns.
+//! let summary = workbook.create_sheet(Some("Summary"))?;
+//!
+//! let sheet = &mut workbook.worksheets[summary];
 //! sheet.set("A1", CellValue::text("Item"))?;
 //! sheet.set("B1", CellValue::text("Revenue"))?;
 //! sheet.set("A2", CellValue::text("Widget"))?;

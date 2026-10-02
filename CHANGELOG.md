@@ -91,7 +91,7 @@ Each of these is documented at the call site as well as in the README.
 
 ### Verification
 
-- 480 tests: 368 unit tests and 110 in the MCP server, plus two doctests.
+- 481 tests: 369 unit tests and 110 in the MCP server, plus two doctests.
 - Values that came from Python are pinned rather than recomputed: the password hashes,
   the date serials, the Julian day numbers, the chart axis arithmetic and the
   `is_date_format` rule.

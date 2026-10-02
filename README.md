@@ -19,6 +19,9 @@ crates/
 ## Contents
 
 - [Installation](#installation)
+- [Quick start](#quick-start)
+- [Using it from Rust](#using-it-from-rust)
+- [Using it from an AI agent](#using-it-from-an-ai-agent)
 - [Reading a workbook](#reading-a-workbook)
 - [Writing a workbook](#writing-a-workbook)
 - [What is covered](#what-is-covered)
@@ -31,15 +34,110 @@ crates/
 
 ## Installation
 
+lexcel is not on crates.io yet, so depend on the git tag:
+
 ```toml
 [dependencies]
-lexcel = "1.9"
+lexcel = { git = "https://github.com/SV-stark/lexcel", tag = "v1.9.0" }
+```
+
+Or work from a checkout, which is what you want if you want to change it:
+
+```console
+$ git clone https://github.com/SV-stark/lexcel
+$ cd lexcel
+$ cargo build --workspace
+$ cargo run --example build_and_read   # writes orders.xlsx and reads it back
+```
+
+To use it from another project on the same machine, point at the checkout:
+
+```toml
+[dependencies]
+lexcel = { path = "../lexcel/crates/lexcel" }
 ```
 
 The library has no unsafe code and six dependencies: `chrono` for date arithmetic,
 `quick-xml` for XML, `regex` for the few patterns that need one, `zip` for the package
 container, `png` for reading an image's dimensions, and `thiserror` for the error enum.
 The MCP server adds only `serde`, `serde_json` and `chrono`.
+
+## Quick start
+
+```console
+$ git clone https://github.com/SV-stark/lexcel
+$ cd lexcel
+$ cargo test --workspace        # 481 tests
+$ cargo run --example build_and_read
+wrote orders.xlsx
+sheets: ["Sheet1", "Orders"]
+dimension: A1:D6
+merged: ["A6:D6"]
+frozen at: Some("A2")
+  Text("Item") | Text("Qty") | Text("Price") | Text("Total")
+  Text("Bolt") | Number(10.0) | Number(1.5) | Formula("=B2*C2")
+  Text("Nut") | Number(25.0) | Number(0.75) | Formula("=B3*C3")
+A1 bold: true
+```
+
+## Using it from Rust
+
+`crates/lexcel/examples/build_and_read.rs` is a complete round trip — create a sheet, set
+cells, style a header, merge a range, freeze the panes, save, load. Read it; it is about a
+hundred lines and every line earns its place.
+
+Two things catch people out, and both are openpyxl's behaviour rather than a Rust quirk:
+
+- **`create_sheet` does not make the new sheet active.** `Workbook::new()` already made
+  `Sheet1`, so `active_sheet_mut()` after a `create_sheet` is still `Sheet1` — a mistake
+  that produces a file where the data is on the wrong sheet. Take the index
+  `create_sheet` returns, as [Writing a workbook](#writing-a-workbook) does.
+
+- **`merge_cells` blanks every cell but the top-left one**, so merge before writing the
+  value or the value disappears. It also takes one range, and `set_number_format` takes one
+  coordinate, not a range.
+
+## Using it from an AI agent
+
+`lexcel-mcp` is the same library behind a Model Context Protocol server, so an agent can
+read and edit workbooks instead of guessing at them.
+
+```console
+$ cargo run -p lexcel-mcp -- --root ./spreadsheets
+lexcel-mcp 1.9.0 — a Model Context Protocol server for Excel workbooks
+
+USAGE:
+    lexcel-mcp [--root <directory>]
+```
+
+Point an MCP client at it. For Claude Code:
+
+```console
+$ claude mcp add lexcel -- cargo run -p lexcel-mcp -- --root ./spreadsheets
+```
+
+Or in a client that reads `mcpServers` from a config file:
+
+```json
+{
+  "mcpServers": {
+    "lexcel": {
+      "command": "lexcel-mcp",
+      "args": ["--root", "/path/to/spreadsheets"]
+    }
+  }
+}
+```
+
+The agent then gets 33 tools — `list_sheets`, `read_cells`, `write_cells`, `summarize_range`,
+`add_chart`, `style_cells`, and so on. Two behaviours are worth knowing:
+
+- A tool that ran and failed returns `isError: true` with the message in `content`, so the
+  model can read what went wrong and fix its call. Only an unknown tool is a JSON-RPC error.
+- A misspelled argument is **rejected**, not ignored. A tool that silently drops an argument
+  is worse than one that refuses.
+
+See [The MCP server](#the-mcp-server) for the full tool list and how values are mapped.
 
 ## Reading a workbook
 
@@ -88,9 +186,12 @@ type, so `ws.set("A1", CellValue::Date(..))` reads back as a `Date`.
 use lexcel::{CellValue, Style, Workbook};
 
 let mut workbook = Workbook::new();
-workbook.create_sheet(Some("Summary"))?;
 
-let sheet = workbook.active_sheet_mut()?;
+// `Workbook::new()` already made `Sheet1`, and `create_sheet` appends without
+// making the new sheet active, so take the index it returns.
+let summary = workbook.create_sheet(Some("Summary"))?;
+
+let sheet = &mut workbook.worksheets[summary];
 sheet.set("A1", CellValue::text("Item"))?;
 sheet.set("B1", CellValue::text("Revenue"))?;
 sheet.set("A2", CellValue::text("Widget"))?;

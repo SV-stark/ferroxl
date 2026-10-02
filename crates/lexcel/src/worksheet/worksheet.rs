@@ -524,7 +524,8 @@ impl Worksheet {
         let range_string = range_string.replace('$', "");
         let bounds = self.range_bounds(&range_string)?;
         for row in bounds.min_row..=bounds.max_row {
-            for column in bounds.min_col..=bounds.max_col {
+            // `max_col` is an exclusive bound, so `A1:D1` covers columns 1 through 4.
+            for column in bounds.min_col..bounds.max_col {
                 if row == bounds.min_row && column == bounds.min_col {
                     continue;
                 }
@@ -552,7 +553,8 @@ impl Worksheet {
         self.merged_cells.retain(|item| item != &range_string);
         let bounds = self.range_bounds(&range_string)?;
         for row in bounds.min_row..=bounds.max_row {
-            for column in bounds.min_col..=bounds.max_col {
+            // `max_col` is an exclusive bound, so `A1:D1` covers columns 1 through 4.
+            for column in bounds.min_col..bounds.max_col {
                 if row == bounds.min_row && column == bounds.min_col {
                     continue;
                 }
@@ -872,6 +874,29 @@ mod tests {
 
         assert!(ws.merge_cells("A1").is_err());
         assert!(ws.unmerge_cells("A9:B9").is_err());
+    }
+
+    #[test]
+    fn merging_stays_inside_the_range() {
+        // `RangeBounds::max_col` is exclusive, the way openpyxl's `get_range_boundaries`
+        // makes it. Treating it as inclusive put a blank cell one column past the merge,
+        // which inflated the sheet's dimension and wrote a cell the range never covered.
+        let mut ws = sheet();
+        ws.merge_cells("A6:D6").unwrap();
+        for coordinate in ["B6", "C6", "D6"] {
+            assert!(
+                ws.get_cell(coordinate).is_some_and(|cell| cell.merged),
+                "{coordinate}"
+            );
+        }
+        assert!(ws.get_cell("E6").is_none(), "E6 is outside A6:D6");
+        assert_eq!(ws.calculate_dimension().unwrap(), "A1:D6");
+
+        ws.unmerge_cells("A6:D6").unwrap();
+        assert!(
+            ws.get_cell("E6").is_none(),
+            "unmerging must not create E6 either"
+        );
     }
 
     #[test]
