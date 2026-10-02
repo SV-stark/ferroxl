@@ -239,6 +239,11 @@ pub struct Workbook {
     pub loaded_theme: Option<Vec<u8>>,
     /// The workbook's raw bytes, kept for VBA projects.
     pub vba_archive: Option<Vec<u8>>,
+    /// Parts of a source package this library does not model, kept for the round trip.
+    ///
+    /// Empty for a workbook built from scratch. See [`preserved`] for what survives and,
+    /// more usefully, what does not.
+    pub preserved: preserved::PreservedParts,
     /// Style properties read from a source workbook.
     pub style_properties: Option<StyleProperties>,
     /// Drawings belonging to any sheet.
@@ -273,6 +278,7 @@ impl Workbook {
             encoding: "utf-8".to_string(),
             loaded_theme: None,
             vba_archive: None,
+            preserved: preserved::PreservedParts::default(),
             style_properties: None,
             drawings: Vec::new(),
             relationships: Vec::new(),
@@ -789,6 +795,13 @@ impl ValueSource for Snapshot<'_> {
             .unwrap_or(CellValue::None)
     }
 }
+
+pub mod preserved;
+
+pub use preserved::{
+    GeneratedRelationship, MergedRelationships, PreservedContentType, PreservedParts,
+    PreservedRelationship,
+};
 
 #[cfg(test)]
 mod tests {
