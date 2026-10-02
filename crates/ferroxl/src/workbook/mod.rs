@@ -89,6 +89,118 @@ impl DocumentSecurity {
     }
 }
 
+/// `<calcPr>`: how and when Excel recalculates.
+///
+/// The one setting here that changes what a reader sees rather than how a file looks is
+/// `full_calc_on_load`. ferroxl writes formulas without cached results, so a workbook opened
+/// by anything other than Excel shows no values at all until something recalculates it. That
+/// makes the flag load-bearing rather than cosmetic, and it is why it is settable here rather
+/// than being the fixed literal it was.
+// iterate_delta is an f64, so this cannot be Eq or Hash without the manual bit
+// comparison GradientStop needs. It is compared as a value instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalcProperties {
+    /// The engine version the file was last calculated by. Excel uses it to decide whether to
+    /// recalculate; openpyxl writes 124519.
+    pub calc_id: u32,
+    /// `manual`, `auto` or `autoNoTable`.
+    pub calc_mode: Option<String>,
+    /// Recalculate the whole workbook when it is opened.
+    ///
+    /// `Some(true)` by default, which is what makes a workbook written by ferroxl show values
+    /// when Excel opens it.
+    pub full_calc_on_load: Option<bool>,
+    /// Whether references are written `A1` or `R1C1`.
+    pub ref_mode: Option<String>,
+    /// Whether circular references are iterated rather than refused.
+    pub iterate: Option<bool>,
+    /// How many times to iterate before giving up.
+    pub iterate_count: Option<u32>,
+    /// The change between iterations that counts as converged.
+    pub iterate_delta: Option<f64>,
+    /// Whether to use full precision rather than Excel's 15 digits.
+    pub full_precision: Option<bool>,
+    /// Whether the last calculation finished. `Some(false)` marks a workbook as needing one.
+    pub calc_completed: Option<bool>,
+    /// Whether to recalculate when saving.
+    pub calc_on_save: Option<bool>,
+    /// Whether concurrent calculation is enabled.
+    pub concurrent_calc: Option<bool>,
+    /// How many calculation threads to allow while calculating manually.
+    pub concurrent_manual_count: Option<u32>,
+    /// Whether to force a full calculation.
+    pub force_full_calc: Option<bool>,
+}
+
+impl Default for CalcProperties {
+    /// Excel's own defaults, and openpyxl's: automatic, recalculating on load.
+    fn default() -> Self {
+        CalcProperties {
+            calc_id: 124_519,
+            calc_mode: Some("auto".to_string()),
+            full_calc_on_load: Some(true),
+            ref_mode: None,
+            iterate: None,
+            iterate_count: None,
+            iterate_delta: None,
+            full_precision: None,
+            calc_completed: None,
+            calc_on_save: None,
+            concurrent_calc: None,
+            concurrent_manual_count: None,
+            force_full_calc: None,
+        }
+    }
+}
+
+impl CalcProperties {
+    /// Manual calculation: nothing recalculates until asked.
+    pub fn manual() -> Self {
+        CalcProperties {
+            calc_mode: Some("manual".to_string()),
+            ..CalcProperties::default()
+        }
+    }
+
+    /// The attributes for `<calcPr>`, in the order openpyxl declares them.
+    pub fn attributes(&self) -> Vec<(String, String)> {
+        let mut attrs = vec![("calcId".to_string(), self.calc_id.to_string())];
+        let mut put = |name: &str, value: Option<String>| {
+            if let Some(value) = value {
+                attrs.push((name.to_string(), value));
+            }
+        };
+        put("calcMode", self.calc_mode.clone());
+        put("fullCalcOnLoad", self.full_calc_on_load.map(flag));
+        put("refMode", self.ref_mode.clone());
+        put("iterate", self.iterate.map(flag));
+        put("iterateCount", self.iterate_count.map(|v| v.to_string()));
+        put(
+            "iterateDelta",
+            self.iterate_delta.map(crate::xml::functions::safe_string),
+        );
+        put("fullPrecision", self.full_precision.map(flag));
+        put("calcCompleted", self.calc_completed.map(flag));
+        put("calcOnSave", self.calc_on_save.map(flag));
+        put("concurrentCalc", self.concurrent_calc.map(flag));
+        put(
+            "concurrentManualCount",
+            self.concurrent_manual_count.map(|v| v.to_string()),
+        );
+        put("forceFullCalc", self.force_full_calc.map(flag));
+        attrs
+    }
+}
+
+/// A boolean as OOXML writes it: `1` and `0`.
+fn flag(value: bool) -> String {
+    if value {
+        "1".to_string()
+    } else {
+        "0".to_string()
+    }
+}
+
 /// The container for all other parts of the document.
 #[derive(Debug, Clone)]
 pub struct Workbook {
@@ -102,6 +214,8 @@ pub struct Workbook {
     pub properties: DocumentProperties,
     /// Document security.
     pub security: DocumentSecurity,
+    /// How and when Excel recalculates this workbook.
+    pub calculation: CalcProperties,
     /// The workbook-level default style.
     pub style: Style,
     /// Whether to use the streaming writer.
@@ -142,6 +256,7 @@ impl Workbook {
             named_ranges: Vec::new(),
             properties: DocumentProperties::new(),
             security: DocumentSecurity::new(),
+            calculation: CalcProperties::default(),
             style: Style::new(),
             optimized_write: false,
             optimized_read: false,
@@ -277,6 +392,18 @@ impl Workbook {
     }
 
     /// Look a worksheet up by title.
+    /// Replace the calculation properties.
+    ///
+    /// [`CalcProperties::default`] sets `full_calc_on_load`, which is the one setting that
+    /// changes what a reader sees rather than how the file looks: ferroxl writes formulas
+    /// without cached results, so without it anything other than Excel opens the workbook and
+    /// finds no values at all.
+    pub fn set_calculation_properties(&mut self, calculation: CalcProperties) -> &mut Self {
+        self.calculation = calculation;
+        self
+    }
+
+    /// The sheet with this title, if there is one.
     pub fn get_sheet_by_name(&self, name: &str) -> Option<&Worksheet> {
         self.worksheets.iter().find(|sheet| sheet.title() == name)
     }
@@ -623,5 +750,78 @@ mod tests {
         assert_eq!(props.company, "Microsoft Corporation");
         assert_eq!(props.excel_base_date, BaseDate::Windows1900);
         assert!(!DocumentSecurity::new().lock_structure);
+    }
+
+    #[test]
+    fn the_defaults_match_excel_and_openpyxl() {
+        let calc = CalcProperties::default();
+        assert_eq!(calc.calc_id, 124_519);
+        assert_eq!(calc.calc_mode.as_deref(), Some("auto"));
+        // The one that matters: ferroxl writes formulas with no cached result, so without
+        // this a workbook opens in Excel showing blanks.
+        assert_eq!(calc.full_calc_on_load, Some(true));
+    }
+
+    #[test]
+    fn manual_calculation_is_expressible() {
+        let calc = CalcProperties::manual();
+        assert_eq!(calc.calc_mode.as_deref(), Some("manual"));
+        // Turning calculation off without turning recalculation-on-load off is how a workbook
+        // ends up showing nothing at all, so the default has to survive the switch.
+        assert_eq!(calc.full_calc_on_load, Some(true));
+    }
+
+    #[test]
+    fn the_attributes_come_out_in_declaration_order() {
+        let calc = CalcProperties {
+            calc_mode: Some("manual".to_string()),
+            iterate: Some(true),
+            iterate_count: Some(100),
+            iterate_delta: Some(0.001),
+            force_full_calc: Some(true),
+            ..CalcProperties::default()
+        };
+        let attrs = calc.attributes();
+        let names: Vec<&str> = attrs.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "calcId",
+                "calcMode",
+                "fullCalcOnLoad",
+                "iterate",
+                "iterateCount",
+                "iterateDelta",
+                "forceFullCalc",
+            ]
+        );
+        assert!(attrs.contains(&("iterate".to_string(), "1".to_string())));
+    }
+
+    #[test]
+    fn a_workbook_carries_its_calculation_properties() {
+        let mut workbook = Workbook::new();
+        assert_eq!(workbook.calculation.calc_mode.as_deref(), Some("auto"));
+        workbook.set_calculation_properties(CalcProperties::manual());
+        assert_eq!(workbook.calculation.calc_mode.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn the_calc_properties_survive_a_round_trip() {
+        let mut workbook = Workbook::new();
+        workbook.set_calculation_properties(CalcProperties {
+            calc_mode: Some("manual".to_string()),
+            full_calc_on_load: Some(false),
+            iterate: Some(true),
+            iterate_count: Some(100),
+            ..CalcProperties::default()
+        });
+        let bytes = workbook.to_bytes().expect("saved");
+        let loaded = crate::reader::excel::load_workbook_from_bytes(bytes, Default::default())
+            .expect("loaded");
+        assert_eq!(loaded.calculation.calc_mode.as_deref(), Some("manual"));
+        assert_eq!(loaded.calculation.full_calc_on_load, Some(false));
+        assert_eq!(loaded.calculation.iterate, Some(true));
+        assert_eq!(loaded.calculation.iterate_count, Some(100));
     }
 }

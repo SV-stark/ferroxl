@@ -176,6 +176,7 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
         }
     }
     if let Some(data) = read_part(&mut archive, ARC_WORKBOOK) {
+        workbook.calculation = crate::reader::workbook::read_calc_properties(&data);
         if let Ok(Some(active)) = read_workbook_settings(&data) {
             workbook.active_sheet_index = active;
         }

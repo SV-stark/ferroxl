@@ -59,6 +59,41 @@ pub fn read_excel_base_date(xml_source: &[u8]) -> Result<BaseDate> {
 }
 
 /// Read the active tab from the workbook view.
+/// Read `<calcPr>` back into `CalcProperties`.
+///
+/// Absent entirely from the reader before this, so a workbook set to manual calculation loaded
+/// as automatic: and ferroxl writes formulas without cached results, so "automatic" is the
+/// difference between a workbook that shows values when Excel opens it and one that does not.
+pub fn read_calc_properties(xml_source: &[u8]) -> crate::workbook::CalcProperties {
+    let Ok(root) = crate::xml::functions::fromstring(xml_source) else {
+        return crate::workbook::CalcProperties::default();
+    };
+    let Some(node) = root.find(format!("{{{SHEET_MAIN_NS}}}calcPr")) else {
+        return crate::workbook::CalcProperties::default();
+    };
+    use crate::workbook::CalcProperties;
+    let number = |name: &str| node.get(name).and_then(|v| v.trim().parse::<u32>().ok());
+    let boolean = |name: &str| node.get(name).map(|v| v != "0" && v != "false");
+    CalcProperties {
+        calc_id: number("calcId").unwrap_or(124_519),
+        calc_mode: node.get("calcMode").map(|v| v.to_string()),
+        full_calc_on_load: boolean("fullCalcOnLoad"),
+        ref_mode: node.get("refMode").map(|v| v.to_string()),
+        iterate: boolean("iterate"),
+        iterate_count: number("iterateCount"),
+        iterate_delta: node
+            .get("iterateDelta")
+            .and_then(|v| v.trim().parse::<f64>().ok()),
+        full_precision: boolean("fullPrecision"),
+        calc_completed: boolean("calcCompleted"),
+        calc_on_save: boolean("calcOnSave"),
+        concurrent_calc: boolean("concurrentCalc"),
+        concurrent_manual_count: number("concurrentManualCount"),
+        force_full_calc: boolean("forceFullCalc"),
+    }
+}
+
+/// The workbook's active tab, as an index into the sheets.
 pub fn read_workbook_settings(xml_source: &[u8]) -> Result<Option<usize>> {
     let root = fromstring(xml_source)?;
     let Some(view) = root.find(format!("*/{{{SHEET_MAIN_NS}}}workbookView")) else {

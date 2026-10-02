@@ -479,13 +479,12 @@ pub fn write_workbook(workbook: &Workbook) -> String {
     }
     root.append(defined_names);
 
+    // The calculation properties were three fixed attributes. `fullCalcOnLoad` is the one that
+    // matters: ferroxl writes formulas with no cached result, so this is what makes Excel
+    // calculate them on open rather than showing blanks.
     root.append(Element::with_attributes(
         format!("{{{SHEET_MAIN_NS}}}calcPr"),
-        [
-            ("calcId", "124519"),
-            ("calcMode", "auto"),
-            ("fullCalcOnLoad", "1"),
-        ],
+        workbook.calculation.attributes(),
     ));
     root.to_pretty_string()
 }
