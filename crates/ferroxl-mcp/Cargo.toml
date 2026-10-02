@@ -5,6 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "ferroxl-mcp: a Model Context Protocol server exposing ferroxl spreadsheet tools to AI agents"
+keywords = ["excel", "xlsx", "spreadsheet", "mcp", "ai"]
+categories = ["command-line-utilities"]
+repository = "https://github.com/SV-stark/ferroxl"
+homepage = "https://github.com/SV-stark/ferroxl"
+documentation = "https://docs.rs/ferroxl-mcp"
+readme = "README.md"
+exclude = [".github", "target"]
 
 [[bin]]
 name = "ferroxl-mcp"

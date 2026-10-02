@@ -11,7 +11,10 @@ description = "ferroxl: a Rust library to read/write Excel 2007 xlsx/xlsm files,
 
 [workspace.dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-ferroxl = { path = "crates/ferroxl", version = "0.1.0" }
+# The version here is the requirement `ferroxl-mcp` publishes against, not a copy of the
+# crate's own version. It has to name a version that exists on crates.io, so it is bumped by
+# hand -- `version.workspace` does not apply to dependencies.
+ferroxl = { path = "crates/ferroxl", version = "0.1.2" }
 png = "0.18"
 # `encoding` provides the Decoder that quick-xml's attribute API requires; ferroxl reads
 # UTF-8 XML but the type is still needed at the call site.

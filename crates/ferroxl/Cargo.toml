@@ -5,8 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "ferroxl: read and write Excel 2007 xlsx/xlsm files with an openpyxl-compatible API"
-keywords = ["excel", "xlsx", "spreadsheet", "ooxml"]
+keywords = ["excel", "xlsx", "spreadsheet", "ooxml", "openpyxl"]
 categories = ["encoding", "parser-implementations"]
+repository = "https://github.com/SV-stark/ferroxl"
+homepage = "https://github.com/SV-stark/ferroxl"
+documentation = "https://docs.rs/ferroxl"
+readme = "README.md"
+
+# Nothing in the crate is needed to build it but the library, and a `.tar.gz` in the
+# published package would be a 1.5 MB download for nobody.
+# `test_nrlm_read.rs` is excluded rather than deleted: it is a scratch runner written against
+# a local directory, and a hardcoded path from the maintainer's machine is not something to
+# publish. It still builds and runs with `cargo run --example test_nrlm_read`.
+exclude = [".github", "target", "examples/test_nrlm_read.rs"]
 
 [lib]
 name = "ferroxl"
