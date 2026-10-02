@@ -1,0 +1,20 @@
+# The repository stores LF; a checkout on Windows may use CRLF. Setting `text` normalises
+# the index, and `eol=lf` keeps the working copy matching it too, so a diff never shows a
+# whole file as changed because one side has CRLF.
+* text=auto eol=lf
+
+*.rs   text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+LICENSE text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# A workbook is a zip archive; Git must not try to normalise its bytes.
+*.xlsx binary
+*.xlsm binary
+
+# A Windows build leaves these around and they are never wanted.
+*.exe binary
+*.pdb binary

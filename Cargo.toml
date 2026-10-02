@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/lexcel", "crates/lexcel-mcp"]
+
+[workspace.package]
+version = "1.9.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+description = "lexcel: a Rust library to read/write Excel 2007 xlsx/xlsm files, a feature-parity port of openpyxl, with an MCP server for AI agents"
+
+[workspace.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+lexcel = { path = "crates/lexcel", version = "1.9.0" }
+png = "0.18"
+# `encoding` provides the Decoder that quick-xml's attribute API requires; lexcel reads
+# UTF-8 XML but the type is still needed at the call site.
+quick-xml = { version = "0.42", features = ["encoding"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zip = { version = "8", default-features = false, features = ["deflate", "bzip2"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

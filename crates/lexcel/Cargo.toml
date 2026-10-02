@@ -1,0 +1,24 @@
+[package]
+name = "lexcel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "lexcel: read and write Excel 2007 xlsx/xlsm files with an openpyxl-compatible API"
+keywords = ["excel", "xlsx", "spreadsheet", "ooxml"]
+categories = ["encoding", "parser-implementations"]
+
+[lib]
+name = "lexcel"
+path = "src/lib.rs"
+
+[dependencies]
+chrono.workspace = true
+png.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

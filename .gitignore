@@ -1,0 +1,43 @@
+# Rust build output
+/target
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock.orig
+.cargo/config.toml
+.cargo/registry/
+
+# Test and coverage artefacts
+*.profraw
+*.profdata
+tarpaulin-report.html
+lcov.info
+/coverage/
+
+# Python helpers under tools/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and IDEs
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating systems
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Workbooks written by the examples or a test run. The tests build their fixtures in a
+# temporary directory, so nothing here needs an exception.
+*.xlsx
+*.xlsm
+*.xltx
+*.xltm
