@@ -5,7 +5,7 @@ members = ["crates/lexcel", "crates/lexcel-mcp"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 license = "MIT"
 description = "lexcel: a Rust library to read/write Excel 2007 xlsx/xlsm files, a feature-parity port of openpyxl, with an MCP server for AI agents"
 

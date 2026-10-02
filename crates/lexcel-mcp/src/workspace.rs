@@ -132,8 +132,7 @@ mod tests {
     use super::*;
 
     fn workspace() -> Workspace {
-        let dir = std::env::temp_dir().join("lexcel-mcp-workspace-tests");
-        Workspace::new(dir).expect("workspace")
+        crate::testing::empty_workspace("workspace")
     }
 
     #[test]

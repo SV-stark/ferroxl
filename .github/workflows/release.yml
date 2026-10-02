@@ -34,9 +34,18 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
+          # Cross-compiling needs a C toolchain for the target: rustc needs a linker and
+          # anything with a build script needs a compiler. `dtolnay/rust-toolchain`
+          # installs the Rust standard library for the target but no C toolchain, so
+          # without this the build fails at the link step rather than at the compile step,
+          # which is not where you want to discover it.
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+            cc: aarch64-linux-gnu-gcc
+            ar: aarch64-linux-gnu-ar
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
@@ -60,6 +69,15 @@ jobs:
         with:
           shared-key: release-build
 
+      - name: Install a C toolchain for ${{ matrix.target }}
+        # Truthiness, not `!= ''`: a matrix entry without an `apt` key has a null value,
+        # and comparing null to an empty string relies on a coercion rule to come out right.
+        if: matrix.apt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+          ${{ matrix.linker }} --version | head -1
+
       - name: Verify the tag matches the manifest
         if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
@@ -73,6 +91,13 @@ jobs:
 
       - name: Build
         run: cargo build --release --locked --bin lexcel-mcp --target ${{ matrix.target }}
+        env:
+          # Defaults are the native tools, so setting them unconditionally is harmless for
+          # the targets that need nothing special. `matrix.linker` is empty for those, and
+          # an empty linker variable would be worse than none at all.
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || 'cc' }}
+          CC_aarch64_unknown_linux_gnu: ${{ matrix.cc || 'cc' }}
+          AR_aarch64_unknown_linux_gnu: ${{ matrix.ar || 'ar' }}
 
       # A binary that does not print its version is not a release. This also catches a
       # target/architecture mismatch, which otherwise shows up as a mystery crash report.
