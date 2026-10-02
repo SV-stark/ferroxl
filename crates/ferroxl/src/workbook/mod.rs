@@ -214,6 +214,11 @@ pub struct Workbook {
     pub properties: DocumentProperties,
     /// Document security.
     pub security: DocumentSecurity,
+    /// The workbook's named styles, which a cell references by name.
+    ///
+    /// This is what makes `cell.style = "Good"` possible. It was absent entirely, so a
+    /// workbook using named styles lost both the names and the formatting behind them.
+    pub named_styles: crate::styles::named_style::NamedStyleList,
     /// How and when Excel recalculates this workbook.
     pub calculation: CalcProperties,
     /// The workbook-level default style.
@@ -257,6 +262,7 @@ impl Workbook {
             properties: DocumentProperties::new(),
             security: DocumentSecurity::new(),
             calculation: CalcProperties::default(),
+            named_styles: crate::styles::named_style::NamedStyleList::new(),
             style: Style::new(),
             optimized_write: false,
             optimized_read: false,
@@ -401,6 +407,98 @@ impl Workbook {
     pub fn set_calculation_properties(&mut self, calculation: CalcProperties) -> &mut Self {
         self.calculation = calculation;
         self
+    }
+
+    /// Apply a named style to a cell, registering the style if the workbook does not have it.
+    ///
+    /// This is the method that makes a named style mean what it says in two places at once.
+    /// [`Worksheet::apply_named_style`] only copies the formatting onto the cell, which is
+    /// enough for the cell to *look* right -- but a style nobody has heard of does not appear
+    /// in Excel's style gallery, does not show up in `wb.named_styles`, and leaves
+    /// `cell.style` reading back empty in openpyxl. Registering it means all three work.
+    ///
+    /// A name Excel already defines resolves to that built-in, so the two ways of asking for
+    /// `"Good"` agree:
+    ///
+    /// ```
+    /// # use ferroxl::workbook::Workbook;
+    /// # use ferroxl::cell::cell::CellValue;
+    /// let mut workbook = Workbook::new();
+    /// workbook.active_sheet_mut().unwrap().set("A1", CellValue::number(1.0)).unwrap();
+    /// workbook.apply_named_style(0, "A1", "Good").unwrap();
+    /// assert!(workbook.named_styles.get("Good").is_some());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// An unknown name is an error rather than a default. Silently falling back to `Normal`
+    /// would produce a file that opens, looks deliberate, and is wrong -- which is the worst
+    /// of the three outcomes.
+    pub fn apply_named_style(
+        &mut self,
+        sheet_index: usize,
+        coordinate: &str,
+        name: &str,
+    ) -> Result<&'static str> {
+        use crate::styles::named_style::{NamedStyle, NamedStyleList};
+
+        // Resolve the sheet first. Registering the style and *then* discovering the index is
+        // out of range would leave the workbook changed by a call that reported failure.
+        if !self.worksheets.get(sheet_index).is_some() {
+            return Err(Error::Key(format!("no sheet at index {sheet_index}")));
+        }
+
+        if self.named_styles.get(name).is_none() {
+            // `Normal` is pinned to index 0 because `xfId="0"` means Normal; a workbook whose
+            // index 0 is something else has every style reference pointing at the wrong thing.
+            if name.eq_ignore_ascii_case("normal") && !self.named_styles.is_empty() {
+                return Err(Error::Key(
+                    "the workbook already has named styles, so index 0 is not free for \"Normal\""
+                        .to_string(),
+                ));
+            }
+            let style = NamedStyle::builtin(name).ok_or_else(|| {
+                crate::styles::named_style::unknown_style(name, &self.named_styles.names())
+            })?;
+            if self.named_styles.is_empty() && self.named_styles.index_of("Normal").is_none() {
+                self.named_styles = NamedStyleList::new();
+                self.named_styles.add(NamedStyle::new("Normal"))?;
+            }
+            self.named_styles.add(style)?;
+        }
+
+        let style = self
+            .named_styles
+            .get(name)
+            .ok_or_else(|| {
+                crate::styles::named_style::unknown_style(name, &self.named_styles.names())
+            })?
+            .to_style();
+        let sheet = self
+            .worksheets
+            .get_mut(sheet_index)
+            .ok_or_else(|| Error::Key(format!("no sheet at index {sheet_index}")))?;
+        sheet.set_style(coordinate, style)?;
+        // The style is registered now, so the index is real rather than a guess.
+        Ok(crate::styles::named_style::builtin_style(name).unwrap_or(""))
+    }
+
+    /// The named styles in this workbook, by name.
+    pub fn named_style_names(&self) -> Vec<&str> {
+        self.named_styles.names()
+    }
+
+    /// Register a named style, adding it to the workbook's style gallery.
+    ///
+    /// Returns an error if the name is taken, rather than replacing it: overwriting `Good`
+    /// would quietly restyle every cell that already referenced it.
+    pub fn add_named_style(&mut self, style: crate::styles::named_style::NamedStyle) -> Result<()> {
+        use crate::styles::named_style::{NamedStyle, NamedStyleList};
+        if self.named_styles.is_empty() {
+            self.named_styles = NamedStyleList::new();
+            self.named_styles.add(NamedStyle::new("Normal"))?;
+        }
+        self.named_styles.add(style)
     }
 
     /// The sheet with this title, if there is one.
@@ -823,5 +921,97 @@ mod tests {
         assert_eq!(loaded.calculation.full_calc_on_load, Some(false));
         assert_eq!(loaded.calculation.iterate, Some(true));
         assert_eq!(loaded.calculation.iterate_count, Some(100));
+    }
+
+    #[cfg(test)]
+    mod named_style_tests {
+        use crate::cell::cell::CellValue;
+        use crate::workbook::Workbook;
+
+        #[test]
+        fn applying_a_built_in_registers_it_so_it_is_readable_back() {
+            let mut workbook = Workbook::new();
+            let sheet = workbook.active_sheet_mut().expect("sheet");
+            sheet.set("A1", CellValue::number(1.0)).expect("cell");
+            workbook
+                .apply_named_style(0, "A1", "Good")
+                .expect("Good is built in");
+
+            // The point of registering: the name has to be findable afterwards, or the style is
+            // invisible to everything except the cell that happens to use it.
+            let bytes = workbook.to_bytes().expect("saved");
+            let loaded = crate::reader::excel::load_workbook_from_bytes(bytes, Default::default())
+                .expect("loaded");
+            assert_eq!(loaded.named_style_names(), vec!["Normal", "Good"]);
+            let good = loaded.named_styles.get("Good").expect("Good survived");
+            assert_eq!(good.builtin_id.as_deref(), Some("26"));
+            // `Normal` has to stay at index 0 -- `xfId="0"` resolves to it.
+            assert_eq!(loaded.named_styles.index_of("Normal"), Some(0));
+        }
+
+        #[test]
+        fn applying_twice_does_not_register_it_twice() {
+            let mut workbook = Workbook::new();
+            workbook
+                .active_sheet_mut()
+                .expect("sheet")
+                .set("A1", CellValue::number(1.0))
+                .expect("cell");
+            workbook.apply_named_style(0, "A1", "Good").expect("first");
+            workbook.apply_named_style(0, "A1", "Good").expect("second");
+            assert_eq!(workbook.named_style_names(), vec!["Normal", "Good"]);
+        }
+
+        #[test]
+        fn a_workbook_defined_style_can_be_applied_by_name() {
+            // The sheet-level method can only see built-ins, so this is the one path that makes a
+            // style the caller defined actually usable.
+            let mut workbook = Workbook::new();
+            workbook
+                .add_named_style(
+                    crate::styles::named_style::NamedStyle::new("Band")
+                        .with_number_format("0.00%")
+                        .with_font(crate::styles::fonts::Font::new().with_bold(true)),
+                )
+                .expect("registered");
+            workbook
+                .active_sheet_mut()
+                .expect("sheet")
+                .set("A1", CellValue::number(0.5))
+                .expect("cell");
+            workbook
+                .apply_named_style(0, "A1", "Band")
+                .expect("Band is defined");
+
+            let cell = workbook.worksheets[0].get_style("A1");
+            assert!(cell.font.bold, "the style's formatting reaches the cell");
+            assert_eq!(cell.number_format.format_code(), "0.00%");
+        }
+
+        #[test]
+        fn an_unknown_name_is_an_error_rather_than_a_silent_normal() {
+            let mut workbook = Workbook::new();
+            workbook
+                .active_sheet_mut()
+                .expect("sheet")
+                .set("A1", CellValue::number(1.0))
+                .expect("cell");
+            assert!(workbook.apply_named_style(0, "A1", "Nonsense").is_err());
+            // Nothing was registered and nothing was formatted: the error leaves no trace that a
+            // later reader could mistake for intent.
+            // Nothing at all was registered -- not even `Normal`. The writer synthesises `Normal` for
+            // an empty list, so leaving it empty is both the smaller change and the accurate one.
+            assert!(workbook.named_style_names().is_empty());
+            assert_eq!(
+                workbook.worksheets[0].get_style("A1"),
+                crate::styles::Style::default()
+            );
+        }
+
+        #[test]
+        fn a_missing_sheet_is_an_error_not_a_panic() {
+            let mut workbook = Workbook::new();
+            assert!(workbook.apply_named_style(7, "A1", "Good").is_err());
+        }
     }
 }

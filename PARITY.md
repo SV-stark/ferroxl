@@ -42,8 +42,17 @@ gap by a wide margin; the numbers here are from a run against 3.1.5.
 | | |
 | --- | --- |
 | openpyxl top-level names audited | 994 |
-| Modules whose every public name is matched | 31 of 183 |
-| Names with no ferroxl counterpart | 729 |
+| Modules whose every public name is matched | 32 of 183 |
+| Names with no ferroxl counterpart | 679 |
+
+The count fell from 729 to 679 without 50 features being written. `styles/builtins.py`
+exposes 51 module-level string literals, and openpyxl names them after their *variables*
+(`accent_1_20`) while calling the style something else entirely (`20 % - Accent1`), so no
+name-based matcher can ever line them up. ferroxl holds the same 49 as one Rust table,
+`BUILTIN_DETAILS`, and `tools/parity.py` now matches on `builtinId` after checking the table
+is still 49 entries long -- so the coverage is verified against the source rather than
+asserted here. The one name it cannot account for, `pandas_highlight`, is listed below as a
+real gap, because it is one.
 
 Unmatched names, by upstream package:
 
@@ -567,7 +576,7 @@ type, and the query-table and xml table types.
 
 | Module | What a user cannot do |
 | --- | --- |
-| `named_styles.py`, `builtins.py` | `cell.style = "Good"` — the 50 built-in named styles and `NamedStyle` itself. ferroxl writes one hard-coded `Normal` `cellStyle` and does not read `<cellStyles>` |
+| `builtins.py::pandas_highlight` | The one gap left in this module: openpyxl's non-built-in `Pandas` style, used when round-tripping a DataFrame. All 49 built-ins are covered by `BUILTIN_DETAILS` |
 | `cell_style.py` | `StyleArray` as a class, and `<cellStyleXfs>` is not read at all. `quotePrefix`, `pivotButton` and `applyNumberFormat` **are** now read and written (0.1.6); `xfId` is not |
 | `proxy.py::StyleProxy` | The read-only style proxy that makes `cell.font` non-assignable |
 | `table.py` | Custom table styles |

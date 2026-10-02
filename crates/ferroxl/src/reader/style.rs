@@ -13,6 +13,7 @@ use crate::styles::borders::{Border, Borders};
 use crate::styles::colors::{Color, COLOR_INDEX};
 use crate::styles::fills::{Fill, GradientStop};
 use crate::styles::fonts::Font;
+use crate::styles::named_style::{NamedStyle, NamedStyleList};
 use crate::styles::numbers::NumberFormat;
 use crate::styles::protection::{Protection, ProtectionFlag};
 use crate::styles::style::Style;
@@ -28,6 +29,8 @@ pub struct StyleTable {
     pub dxf_list: Vec<DxfStyle>,
     /// The indexed colour palette.
     pub color_index: Vec<String>,
+    /// The `<cellStyles>` records, in order. A cell's `xfId` is an index into this.
+    pub named_styles: NamedStyleList,
 }
 
 /// Parse `styles.xml`.
@@ -39,6 +42,7 @@ pub fn read_style_table(xml_source: &[u8]) -> Result<StyleTable> {
             table: Vec::new(),
             dxf_list: Vec::new(),
             color_index: COLOR_INDEX.iter().map(|c| c.to_string()).collect(),
+            named_styles: NamedStyleList::new(),
         },
     };
     parser.parse()?;
@@ -59,6 +63,7 @@ impl StyleTableParser {
         let border_list = self.parse_borders();
         self.parse_dxfs();
         self.parse_cell_xfs(&custom_formats, &font_list, &fill_list, &border_list)?;
+        self.parse_named_styles(&custom_formats, &font_list, &fill_list, &border_list);
         Ok(())
     }
 
@@ -347,6 +352,128 @@ impl StyleTableParser {
             list.push(dxf);
         }
         self.style_prop.dxf_list = list;
+    }
+
+    /// Read `<cellStyles>` and resolve each style's `xfId` against `<cellStyleXfs>`.
+    ///
+    /// A `<cellStyle>` is a name and an index; the index points into `<cellStyleXfs>`, which
+    /// holds the formatting. Both halves are needed, and `<cellStyleXfs>` was not read at all
+    /// before this -- so a workbook using named styles loaded with the names but none of the
+    /// formatting behind them, which is the worst shape for the loss to take: the list looks
+    /// right and nothing is.
+    fn parse_named_styles(
+        &mut self,
+        custom_formats: &HashMap<u32, String>,
+        font_list: &[Font],
+        fill_list: &[Fill],
+        border_list: &[Borders],
+    ) {
+        let Some(cell_styles) = self.root.find(self.tag("cellStyles")) else {
+            return;
+        };
+        // The base records, indexed by position, which is what an `xfId` refers to.
+        let style_xfs: Vec<&Element> = self
+            .root
+            .find(self.tag("cellStyleXfs"))
+            .map(|node| node.find_all(self.tag("xf")))
+            .unwrap_or_default();
+
+        for node in cell_styles.find_all(self.tag("cellStyle")) {
+            let Some(name) = node.get("name") else {
+                continue;
+            };
+            let mut style = NamedStyle {
+                name: name.to_string(),
+                builtin_id: node.get("builtinId").map(|v| v.to_string()),
+                hidden: node.get("hidden").map(|v| v != "0" && v != "false"),
+                ..NamedStyle::default()
+            };
+            // `xfId` is optional and defaults to 0, which is the Normal record.
+            let xf_id: usize = node
+                .get("xfId")
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            if let Some(xf) = style_xfs.get(xf_id) {
+                let resolved =
+                    self.style_from_xf(xf, custom_formats, font_list, fill_list, border_list);
+                style.font = resolved.font;
+                style.fill = resolved.fill;
+                style.border = resolved.borders;
+                style.alignment = resolved.alignment;
+                style.number_format = resolved.number_format;
+                style.protection = resolved.protection;
+            }
+            let _ = self.style_prop.named_styles.add(style);
+        }
+    }
+
+    /// Resolve one `<xf>` into a [`Style`], whether it came from `cellXfs` or `cellStyleXfs`.
+    ///
+    /// Split out because the two blocks have identical structure and only their container
+    /// differs; the original had this inline for `cellXfs` only, which is why the named-style
+    /// side had nothing to reuse.
+    fn style_from_xf(
+        &self,
+        node: &Element,
+        custom_formats: &HashMap<u32, String>,
+        font_list: &[Font],
+        fill_list: &[Fill],
+        border_list: &[Borders],
+    ) -> Style {
+        let mut style = Style::static_style();
+        if let Some(id) = node
+            .get("numFmtId")
+            .and_then(|v| v.trim().parse::<u32>().ok())
+        {
+            let code = if id < 164 {
+                NumberFormat::builtin_format_code(id)
+                    .unwrap_or(NumberFormat::FORMAT_GENERAL)
+                    .to_string()
+            } else {
+                custom_formats
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| NumberFormat::FORMAT_GENERAL.to_string())
+            };
+            style.number_format.set_format_code(&code);
+        }
+        if let Some(font) = node
+            .get("fontId")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .and_then(|at| font_list.get(at))
+        {
+            style.font = font.clone();
+        }
+        if let Some(fill) = node
+            .get("fillId")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .and_then(|at| fill_list.get(at))
+        {
+            style.fill = fill.clone();
+        }
+        if let Some(border) = node
+            .get("borderId")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .and_then(|at| border_list.get(at))
+        {
+            style.borders = border.clone();
+        }
+        if let Some(alignment) = node.find(self.tag("alignment")) {
+            if let Some(value) = alignment.get("horizontal") {
+                style.alignment.horizontal = value.to_string();
+            }
+            if let Some(value) = alignment.get("vertical") {
+                style.alignment.vertical = value.to_string();
+            }
+            if let Some(value) = alignment.get("indent") {
+                if let Ok(parsed) = value.parse::<i64>() {
+                    style.alignment.indent = parsed;
+                }
+            }
+            style.alignment.wrap_text = xml_truthy(alignment.get("wrapText"));
+            style.alignment.shrink_to_fit = xml_truthy(alignment.get("shrinkToFit"));
+        }
+        style
     }
 
     fn parse_cell_xfs(

@@ -5,7 +5,30 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.6] — 2026-10-02
+## [0.1.6] - 2026-10-02
+
+### Added
+
+- **Named styles.** `NamedStyle`, `NamedStyleList` and `Workbook::named_styles` cover
+  `openpyxl.styles.named_styles`. `<cellStyles>` and `<cellStyleXfs>` are read and written,
+  so a workbook's own styles survive a round trip instead of every cell arriving as `Normal`.
+- **All 49 of Excel's built-in styles**, in `BUILTIN_DETAILS`, generated from openpyxl 3.1.5's
+  `styles/builtins.py` rather than transcribed. Each carries its fill, font colour, size,
+  weight and number format as well as its `builtinId`: Excel renders a built-in from the id
+  alone, so an id-only style looks right in Excel and blank in everything else, openpyxl
+  included.
+- **`Workbook::apply_named_style`** applies *and registers*, so the name reaches Excel's style
+  gallery and reads back as `cell.style`. `Worksheet::apply_named_style` applies only, and a
+  worksheet has no way to reach the workbook's style list.
+- **`Workbook::add_named_style`**, and `Workbook::named_style_names`.
+
+### Fixed
+
+- **`cellXfs` wrote `xfId="0"` unconditionally**, so every cell claimed to derive from `Normal`
+  and openpyxl reported `cell.style` as `'Normal'` even for a cell carrying `Good`'s colours.
+  A cell whose formatting matches a named style now points at it; one the user has altered
+  since no longer does, because claiming the style would make Excel restyle a cell on an edit
+  the user never asked for.
 
 The silent-loss batch: everything here was read as absent or written from a literal, so a
 workbook using it loaded wrong and saved wrong without saying so.

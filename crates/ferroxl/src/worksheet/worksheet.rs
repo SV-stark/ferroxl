@@ -939,6 +939,70 @@ impl Worksheet {
         self.cells.get(coordinate).map(|cell| cell.data_type)
     }
 
+    /// One of Excel's built-in named styles, by name.
+    pub fn builtin_style(name: &str) -> Result<crate::styles::named_style::NamedStyle> {
+        crate::styles::named_style::NamedStyle::builtin(name)
+            .ok_or_else(|| Error::Key(format!("{name} is not one of Excel's built-in styles")))
+    }
+
+    /// Apply a named style to a cell.
+    ///
+    /// This is openpyxl's `cell.style = "Good"` for the built-in styles. A built-in name needs
+    /// no definition, because Excel renders a built-in from its `builtinId`.
+    ///
+    /// Note what this does *not* do: it does not register the name in the workbook's style
+    /// gallery, because a worksheet has no access to the workbook's style list. The cell looks
+    /// right, but `Good` will not appear in Excel's gallery and `cell.style` reads back empty
+    /// in openpyxl. Prefer [`crate::Workbook::apply_named_style`], which registers as well as
+    /// applies; this remains for the common case of styling a cell from a sheet handle.
+    ///
+    /// The style's formatting is *applied* to the cell rather than merely referenced: a cell's
+    /// `xf` carries the full formatting and `xfId` names the base it inherits from. That is
+    /// how Excel works, and doing it the other way round leaves a cell showing the right
+    /// format in Excel and nothing at all in a reader that ignores `xfId`.
+    ///
+    /// A name the workbook does not define and Excel does not build in is refused. Applying a
+    /// default and calling it `Good` would be worse than an error: the file would open and
+    /// show nothing that asked to be styled.
+    ///
+    /// ```
+    /// use ferroxl::{CellValue, Workbook};
+    ///
+    /// let mut workbook = Workbook::new();
+    /// let sheet = workbook.active_sheet_mut().unwrap();
+    /// sheet.set("A1", CellValue::number(1.0)).unwrap();
+    /// // "Good" is one of Excel's built-ins.
+    /// sheet.apply_named_style("A1", "Good").unwrap();
+    /// ```
+    pub fn apply_named_style(&mut self, coordinate: &str, name: &str) -> Result<&'static str> {
+        let style = Self::builtin_style(name)?;
+        self.set_style(coordinate, style.to_style())?;
+        // `BUILTIN_STYLES` holds `&'static str`, so the canonical name outlives the built
+        // struct the caller just looked up.
+        Ok(
+            crate::styles::named_style::builtin_name(&style.builtin_id.unwrap_or_default())
+                .unwrap_or(""),
+        )
+    }
+
+    /// The built-in named style a cell's formatting matches, if any.
+    ///
+    /// Recovered by comparing the cell against each built-in's resolved style. A cell with a
+    /// workbook-defined named style is not reported: those live in the workbook's list, and a
+    /// cell's `xf` does not record which one it came from once it has been flattened.
+    pub fn builtin_style_name(&self, coordinate: &str) -> Option<&'static str> {
+        let style = self.get_style(coordinate);
+        for (_, name) in crate::styles::named_style::BUILTIN_STYLES {
+            let Some(builtin) = crate::styles::named_style::NamedStyle::builtin(name) else {
+                continue;
+            };
+            if builtin.to_style() == style {
+                return Some(name);
+            }
+        }
+        None
+    }
+
     /// Add a print-title named range definition for this sheet.
     ///
     /// Returns the range string so the caller can register it as a named range.

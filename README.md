@@ -13,7 +13,8 @@ instead.
 
 Parity is real but partial, and `PARITY.md` is the honest accounting: what is ported, what
 differs, and what is not there at all. The largest absences are pivot tables, chart-only
-sheets, named styles, and rich text.
+sheets, and rich text. Named styles are done: all 49 of Excel's built-ins plus the workbook's
+own, with `cell.style` reading back a name again.
 
 `PARITY.md` is measured by `tools/parity.py` against a real checkout of the Python, not
 written from memory. It also says what the audit *cannot* see: the tool matches names, so a

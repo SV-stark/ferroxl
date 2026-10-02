@@ -203,6 +203,11 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
         dxf_list,
     });
     let styles = style_table.table;
+    // The named styles, so `cell.style = "Good"` resolves against the workbook's own list.
+    // Without this a workbook using them loaded with the cell formatting but none of the
+    // names behind it -- which is the worst shape for the loss to take, because the list
+    // looks right and nothing is.
+    workbook.named_styles = style_table.named_styles.clone();
 
     // Resolve which archive parts hold which worksheet.
     let sheets = detect_parts(&mut archive, &names)?;

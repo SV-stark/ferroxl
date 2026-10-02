@@ -42,6 +42,8 @@ pub struct StyleTables {
     pub style_list: Vec<Style>,
     /// Style to `cellXfs` index.
     pub style_ids: HashMap<Style, StyleId>,
+    /// The workbook's named styles, which `<cellStyles>` and `<cellStyleXfs>` are built from.
+    pub named_styles: crate::styles::named_style::NamedStyleList,
 }
 
 impl StyleTables {
@@ -73,7 +75,17 @@ impl StyleTables {
 /// Every distinct style across all worksheets is collected, then sorted so the assignment
 /// is deterministic rather than dependent on hash iteration order.
 pub fn build_style_tables(workbook: &Workbook) -> StyleTables {
+    // A named style's own formatting has to be in the tables, or its `<cellStyleXfs>` record
+    // points at index 0 and every style renders as Normal.
+    let named_styles = workbook.named_styles.clone();
     let mut distinct: Vec<Style> = Vec::new();
+    for style in named_styles.iter() {
+        let mut as_style = style.to_style();
+        as_style.is_static = false;
+        if !distinct.contains(&as_style) {
+            distinct.push(as_style);
+        }
+    }
     for sheet in &workbook.worksheets {
         // Row-level styles are keyed by the row number as a string.
         for style in sheet_style_values(sheet) {
@@ -94,6 +106,7 @@ pub fn build_style_tables(workbook: &Workbook) -> StyleTables {
     StyleTables {
         style_list: distinct,
         style_ids,
+        named_styles,
     }
 }
 
@@ -126,9 +139,9 @@ pub fn write_style_table(workbook: &Workbook) -> String {
     write_fonts(&mut root, &tables);
     write_fills(&mut root, &tables);
     write_borders(&mut root, &tables);
-    write_cell_style_xfs(&mut root);
+    write_cell_style_xfs(&mut root, &tables);
     write_cell_xfs(&mut root, &tables);
-    write_cell_styles(&mut root);
+    write_cell_styles(&mut root, &tables.named_styles);
     write_dxfs(&mut root, &dxf_list);
     write_table_styles(&mut root);
     root.to_pretty_string()
@@ -479,19 +492,122 @@ fn write_borders(root: &mut Element, tables: &StyleTables) {
     root.append(node);
 }
 
-fn write_cell_style_xfs(root: &mut Element) {
+/// Write `<cellStyleXfs>`: the formatting behind each named style.
+///
+/// One record per named style, in list order, because a `<cellStyle>`'s `xfId` is an index
+/// into this block. It was a single hard-coded record before, so a workbook with named styles
+/// written every one of them pointing at the default formatting -- which Excel shows as
+/// "Normal" under every name.
+fn write_cell_style_xfs(root: &mut Element, tables: &StyleTables) {
+    // The same tables `cellXfs` uses, so a named style's record points at the font and fill
+    // that record describes rather than at index 0.
+    let (_, fonts) = font_table(tables);
+    let (_, fills) = fill_table(tables);
+    let (_, borders) = border_table(tables);
+    let named = &tables.named_styles;
+
     let mut xfs = Element::new("cellStyleXfs");
-    xfs.set("count", "1");
-    xfs.append(Element::with_attributes(
-        "xf",
-        [
-            ("numFmtId", "0"),
-            ("fontId", "0"),
-            ("fillId", "0"),
-            ("borderId", "0"),
-        ],
-    ));
+    let count = named.len().max(1).to_string();
+    xfs.set("count", count.as_str());
+    if named.is_empty() {
+        xfs.append(Element::with_attributes(
+            "xf",
+            [
+                ("numFmtId", "0"),
+                ("fontId", "0"),
+                ("fillId", "0"),
+                ("borderId", "0"),
+            ],
+        ));
+        root.append(xfs);
+        return;
+    }
+    for style in named.iter() {
+        let mut attributes: Vec<(&str, String)> = Vec::new();
+        attributes.push((
+            "numFmtId",
+            format!("{}", number_format_id(&style.number_format)),
+        ));
+        attributes.push((
+            "fontId",
+            fonts.get(&style.font).copied().unwrap_or(0).to_string(),
+        ));
+        attributes.push((
+            "fillId",
+            fills.get(&style.fill).copied().unwrap_or(0).to_string(),
+        ));
+        attributes.push((
+            "borderId",
+            borders.get(&style.border).copied().unwrap_or(0).to_string(),
+        ));
+        // `alignment` lives on the cell's own `xf`, not on the style record: a named style
+        // supplies the font and fill, and Excel resolves the alignment from the cell. Only
+        // the flag that says the record carries one is written here.
+        if style.alignment != Alignment::new() {
+            attributes.push(("applyAlignment", "1".to_string()));
+        }
+        xfs.append(Element::with_attributes("xf", attributes));
+    }
     root.append(xfs);
+}
+
+/// Write `<cellStyles>`: the names, each pointing at its record in `<cellStyleXfs>`.
+fn write_cell_styles(root: &mut Element, named: &crate::styles::named_style::NamedStyleList) {
+    let mut node = Element::new("cellStyles");
+    let count = named.len().max(1).to_string();
+    node.set("count", count.as_str());
+    if named.is_empty() {
+        node.append(Element::with_attributes(
+            "cellStyle",
+            [("name", "Normal"), ("xfId", "0"), ("builtinId", "0")],
+        ));
+        root.append(node);
+        return;
+    }
+    for (index, style) in named.iter().enumerate() {
+        let mut attributes: Vec<(&str, String)> =
+            vec![("name", style.name.clone()), ("xfId", index.to_string())];
+        if let Some(id) = &style.builtin_id {
+            attributes.push(("builtinId", id.clone()));
+        }
+        if style.hidden == Some(true) {
+            attributes.push(("hidden", "1".to_string()));
+        }
+        node.append(Element::with_attributes("cellStyle", attributes));
+    }
+    root.append(node);
+}
+
+/// The `numFmtId` a number format needs, registering a custom code at 164 or above.
+///
+/// openpyxl's rule: below 164 is the built-in range, above it is the workbook's own table.
+/// Getting this wrong shows a cell with the wrong format rather than an error.
+fn number_format_id(format: &crate::styles::numbers::NumberFormat) -> u32 {
+    let code = format.format_code();
+    if code == crate::styles::numbers::NumberFormat::FORMAT_GENERAL {
+        return 0;
+    }
+    for (id, builtin) in crate::styles::numbers::BUILTIN_FORMATS.iter() {
+        if *builtin == code {
+            return *id;
+        }
+    }
+    164
+}
+
+/// The `<cellStyleXfs>` index of the named style this cell's formatting came from.
+///
+/// A match has to be exact: a cell the user has since altered no longer *is* the named style,
+/// and pointing it at one anyway would make Excel's "modify style" edit cells the user never
+/// asked it to touch. Returning `None` sends it to `Normal` instead, which is at least true.
+fn matching_named_style_index(tables: &StyleTables, style: &Style) -> Option<usize> {
+    tables.named_styles.iter().position(|named| {
+        let mut candidate = named.to_style();
+        // `build_style_tables` clears this when it seeds the table; the flag is bookkeeping and
+        // excluded from equality anyway, so leaving it set here changes nothing either way.
+        candidate.is_static = style.is_static;
+        candidate == *style
+    })
 }
 
 fn write_cell_xfs(root: &mut Element, tables: &StyleTables) {
@@ -519,7 +635,15 @@ fn write_cell_xfs(root: &mut Element, tables: &StyleTables) {
         node.set("numFmtId", "0");
         node.set("fontId", "0");
         node.set("fillId", "0");
-        node.set("xfId", "0");
+        // `xfId` is the index into `<cellStyleXfs>` that this cell's formatting came from.
+        // Writing 0 unconditionally claims every cell derives from Normal, which is why
+        // `cell.style` read back `'Normal'` in openpyxl even for a cell carrying Good's
+        // colours. A cell whose formatting matches a named style points at it; one the user
+        // has since tweaked away from it points at Normal, which is the honest answer.
+        let xf_id = matching_named_style_index(tables, style)
+            .unwrap_or(0)
+            .to_string();
+        node.set("xfId", xf_id.as_str());
         node.set("borderId", "0");
         // The number format's id is always written, but the flag that says to apply it was
         // not. Excel reads the id regardless, which is why nothing looked wrong -- and a
@@ -581,16 +705,6 @@ fn write_cell_xfs(root: &mut Element, tables: &StyleTables) {
 /// The `<alignment/>` attributes for a style that deviates from the default.
 fn alignment_attributes(alignment: &Alignment) -> Vec<(String, String)> {
     alignment.attributes()
-}
-
-fn write_cell_styles(root: &mut Element) {
-    let mut styles = Element::new("cellStyles");
-    styles.set("count", "1");
-    styles.append(Element::with_attributes(
-        "cellStyle",
-        [("name", "Normal"), ("xfId", "0"), ("builtinId", "0")],
-    ));
-    root.append(styles);
 }
 
 fn write_dxfs(root: &mut Element, dxf_list: &[crate::formatting::DxfStyle]) {
@@ -954,5 +1068,128 @@ mod tests {
         assert_eq!(style.fill.stops.len(), 2);
         assert_eq!(style.fill.stops[0].color.index, "FF102030");
         assert_eq!(style.fill.stops[1].color.index, "FFA0B0C0");
+    }
+}
+
+#[cfg(test)]
+mod named_style_tests {
+    use super::*;
+    use crate::cell::cell::CellValue;
+    use crate::styles::fills::Fill;
+    use crate::styles::fonts::Font;
+    use crate::styles::named_style::NamedStyle;
+    use crate::xml::functions::fromstring;
+
+    /// Every `xf` in `<cellXfs>` as `(xfId, fillId)`.
+    fn cell_xfs(xml: &str) -> Vec<(String, String)> {
+        let root = fromstring(xml.as_bytes()).expect("parses");
+        root.find("cellXfs")
+            .expect("cellXfs")
+            .children()
+            .into_iter()
+            .map(|xf| {
+                let attribute = |name: &str| xf.get(name).unwrap_or("0").to_string();
+                (attribute("xfId"), attribute("fillId"))
+            })
+            .collect()
+    }
+
+    fn workbook_with_a_named_style() -> Workbook {
+        let mut workbook = Workbook::new();
+        workbook
+            .add_named_style(
+                NamedStyle::new("Band")
+                    .with_number_format("0.00%")
+                    .with_font(Font::new().with_bold(true)),
+            )
+            .expect("registered");
+        workbook
+            .active_sheet_mut()
+            .expect("sheet")
+            .set("A1", CellValue::number(0.5))
+            .expect("cell");
+        workbook
+            .apply_named_style(0, "A1", "Band")
+            .expect("applied");
+        workbook
+    }
+
+    #[test]
+    fn a_cell_whose_formatting_matches_a_named_style_points_at_it() {
+        // This is what makes openpyxl report `cell.style` as the name rather than "Normal".
+        let workbook = workbook_with_a_named_style();
+        let xml = write_style_table(&workbook);
+        let band = workbook
+            .named_styles
+            .index_of("Band")
+            .expect("Band is at an index")
+            .to_string();
+
+        let xfs = cell_xfs(&xml);
+        // The default xf at 0 stays at xfId 0, which is Normal by construction.
+        assert_eq!(xfs[0].0, "0", "the default xf is Normal");
+        assert!(
+            xfs.iter().any(|(xf_id, _)| *xf_id == band),
+            "some xf points at Band's index {band}: {xfs:?}"
+        );
+    }
+
+    #[test]
+    fn an_untouched_cell_points_at_normal() {
+        let mut workbook = Workbook::new();
+        workbook
+            .active_sheet_mut()
+            .expect("sheet")
+            .set("A1", CellValue::number(1.0))
+            .expect("cell");
+        workbook
+            .add_named_style(NamedStyle::new("Band").with_font(Font::new().with_bold(true)))
+            .expect("registered");
+        let xml = write_style_table(&workbook);
+        let xfs = cell_xfs(&xml);
+        // `build_style_tables` seeds `<cellXfs>` with each named style's formatting so that a
+        // cell matching one can share its entry. That leaves an unreferenced echo of Band at
+        // the end, which costs a few bytes and changes nothing. What must not happen is the
+        // *cell's* xf claiming Band, and the cell's xf is the first after the synthetic
+        // default.
+        assert_eq!(xfs[0].0, "0", "the synthetic default is Normal");
+        assert_eq!(xfs[1].0, "0", "the unstyled cell is Normal");
+        let claiming_band = xfs.iter().filter(|(xf_id, _)| *xf_id == "1").count();
+        assert_eq!(
+            claiming_band, 1,
+            "only Band's own echo references it: {xfs:?}"
+        );
+    }
+
+    #[test]
+    fn a_style_the_user_altered_no_longer_points_at_the_named_style() {
+        let mut workbook = workbook_with_a_named_style();
+        let sheet = workbook.active_sheet_mut().expect("sheet");
+        let mut style = sheet.get_style("A1");
+        style.fill = Fill {
+            fill_type: Some(Fill::FILL_SOLID.to_string()),
+            start_color: crate::styles::colors::Color::new("FFFF0000"),
+            ..Fill::new()
+        };
+        sheet.set_style("A1", style).expect("restyled");
+
+        let xml = write_style_table(&workbook);
+        let band = workbook
+            .named_styles
+            .index_of("Band")
+            .expect("Band")
+            .to_string();
+        let xfs = cell_xfs(&xml);
+        // The filled xf is the altered cell's, and it must not still claim to be Band --
+        // otherwise editing "Band" in Excel would silently restyle a cell the user had
+        // already moved on from.
+        let filled = xfs
+            .iter()
+            .find(|(_, fill_id)| fill_id != "0")
+            .expect("the altered cell has a fill");
+        assert_ne!(
+            filled.0, band,
+            "the altered cell must not point at Band: {xfs:?}"
+        );
     }
 }
