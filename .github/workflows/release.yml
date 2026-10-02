@@ -46,6 +46,9 @@ jobs:
             linker: aarch64-linux-gnu-gcc
             cc: aarch64-linux-gnu-gcc
             ar: aarch64-linux-gnu-ar
+            # Cross-compiled, so the runner cannot execute it. It is checked with `file`
+            # instead of by running it.
+            machine: "ARM aarch64"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
@@ -101,7 +104,9 @@ jobs:
 
       # A binary that does not print its version is not a release. This also catches a
       # target/architecture mismatch, which otherwise shows up as a mystery crash report.
+      # A binary that does not print its version is not a release.
       - name: Smoke test the binary
+        if: ${{ !matrix.machine }}
         shell: bash
         run: |
           set -euo pipefail
@@ -111,6 +116,24 @@ jobs:
           else
             "$dir/lexcel-mcp" --version
           fi
+
+      # A cross-compiled binary cannot be executed on this runner without emulation, so
+      # asking it for its version would fail for the wrong reason. Checking that it is an
+      # executable for the machine we meant to target catches the realistic mistakes: a
+      # stale artifact from the cache, or a linker that quietly produced a host binary.
+      - name: Check the binary is for the target machine
+        if: ${{ matrix.machine }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="target/${{ matrix.target }}/release/lexcel-mcp"
+          test -x "$binary" || { echo "::error::$binary is missing or not executable"; exit 1; }
+          description=$(file -b "$binary")
+          echo "$description"
+          case "$description" in
+            *"${{ matrix.machine }}"*) ;;
+            *) echo "::error::expected a ${{ matrix.machine }} executable, got: $description"; exit 1 ;;
+          esac
 
       - name: Package
         shell: bash
