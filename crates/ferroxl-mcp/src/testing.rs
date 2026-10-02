@@ -52,6 +52,42 @@ pub fn workspace() -> Workspace {
         .save(named_workbook(), "names.xlsx")
         .expect("names");
     workspace
+        .save(chain_workbook(), "chain.xlsx")
+        .expect("chain");
+    workspace
+        .save(cycle_workbook(), "cycle.xlsx")
+        .expect("cycle");
+    workspace
+}
+
+/// A workbook with a dependency chain: `A4` totals `A1:A3` and `A5` doubles `A4`.
+///
+/// The tracing tools need a graph with a branch and a chain in it, not just a single
+/// formula, or they would pass on inputs that say nothing about order.
+pub fn chain_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet_mut().expect("the default sheet");
+    for (coordinate, value) in [("A1", 1), ("A2", 2), ("A3", 3)] {
+        sheet.set(coordinate, value).expect("value");
+    }
+    sheet
+        .set("A4", CellValue::formula("SUM(A1:A3)"))
+        .expect("A4");
+    sheet.set("A5", CellValue::formula("A4*2")).expect("A5");
+    sheet.set("B1", CellValue::formula("A1+A2")).expect("B1");
+    workbook
+}
+
+/// A workbook whose three formulas reference each other in a loop.
+pub fn cycle_workbook() -> Workbook {
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet_mut().expect("the default sheet");
+    for (coordinate, formula) in [("A1", "B1"), ("B1", "C1"), ("C1", "A1")] {
+        sheet
+            .set(coordinate, CellValue::formula(formula))
+            .expect("formula");
+    }
+    workbook
 }
 
 /// A style that shows a percentage in two decimal places.

@@ -200,6 +200,93 @@ pub fn read_formulas(workspace: &Workspace, args: &Args) -> Handled {
     ))
 }
 
+/// What feeds a cell, in the order a recalculation would visit it.
+pub fn trace_precedents(workspace: &Workspace, args: &Args) -> Handled {
+    let workbook = open(workspace, args)?;
+    let index = sheet_index(&workbook, args)?;
+    let sheet = &workbook.worksheets[index];
+    let cell = args.require_str("cell")?;
+    let precedents = sheet.trace_precedents(&cell).map_err(|e| e.to_string())?;
+    let summary = if precedents.is_empty() {
+        format!("{} has no precedents in {}", cell, sheet.title)
+    } else {
+        format!(
+            "{} in {} is fed by {} cell{}: {}",
+            cell,
+            sheet.title,
+            precedents.len(),
+            if precedents.len() == 1 { "" } else { "s" },
+            join_capped(&precedents)
+        )
+    };
+    Ok((
+        summary,
+        json!({ "sheet": sheet.title, "cell": cell, "precedents": precedents }),
+    ))
+}
+
+/// Every formula that would go stale if a cell changed.
+pub fn trace_dependents(workspace: &Workspace, args: &Args) -> Handled {
+    let workbook = open(workspace, args)?;
+    let index = sheet_index(&workbook, args)?;
+    let sheet = &workbook.worksheets[index];
+    let cell = args.require_str("cell")?;
+    let dependents = sheet.trace_dependents(&cell).map_err(|e| e.to_string())?;
+    let summary = if dependents.is_empty() {
+        format!("Nothing in {} depends on {}", sheet.title, cell)
+    } else {
+        format!(
+            "Changing {} in {} affects {} formula{}: {}",
+            cell,
+            sheet.title,
+            dependents.len(),
+            if dependents.len() == 1 { "" } else { "s" },
+            join_capped(&dependents)
+        )
+    };
+    Ok((
+        summary,
+        json!({ "sheet": sheet.title, "cell": cell, "dependents": dependents }),
+    ))
+}
+
+/// Every circular reference in a sheet, as closed paths.
+pub fn check_circular_references(workspace: &Workspace, args: &Args) -> Handled {
+    let workbook = open(workspace, args)?;
+    let index = sheet_index(&workbook, args)?;
+    let sheet = &workbook.worksheets[index];
+    let cycles = sheet.circular_references().map_err(|e| e.to_string())?;
+    let summary = if cycles.is_empty() {
+        format!("No circular references in {}", sheet.title)
+    } else {
+        format!(
+            "{} circular reference{} in {}: {}",
+            cycles.len(),
+            if cycles.len() == 1 { "" } else { "s" },
+            sheet.title,
+            cycles
+                .iter()
+                .map(|cycle| cycle.join(" -> "))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    };
+    Ok((summary, json!({ "sheet": sheet.title, "cycles": cycles })))
+}
+
+/// Join coordinates for a summary line without letting a large graph fill the context.
+fn join_capped(cells: &[String]) -> String {
+    const SHOWN: usize = 12;
+    if cells.len() <= SHOWN {
+        return cells.join(", ");
+    }
+    format!(
+        "{} and {} more",
+        cells[..SHOWN].join(", "),
+        cells.len() - SHOWN
+    )
+}
+
 /// Search a sheet for text.
 pub fn search_values(workspace: &Workspace, args: &Args) -> Handled {
     let workbook = open(workspace, args)?;
@@ -473,6 +560,7 @@ fn sheet_error(workbook: &ferroxl::Workbook, name: &str) -> String {
 mod tests {
     use super::*;
     use crate::testing;
+    use crate::tools;
 
     #[test]
     fn list_sheets_reports_names_and_dimensions() {
@@ -497,6 +585,89 @@ mod tests {
         assert_eq!(payload["by_type"]["text"], json!(2));
         assert_eq!(payload["by_type"]["formula"], json!(1));
         assert_eq!(payload["merged_ranges"], json!(["E1:F1"]));
+    }
+
+    #[test]
+    fn trace_precedents_returns_what_feeds_a_cell() {
+        let workspace = testing::workspace();
+        let args = Args::new(&json!({ "path": "chain.xlsx", "cell": "A5" }));
+        let (summary, payload) = trace_precedents(&workspace, &args).unwrap();
+        // A5 reads A4, A4 reads A1:A3, so the numbers come before the formula that used them.
+        assert_eq!(payload["precedents"], json!(["A1", "A2", "A3", "A4"]));
+        assert!(summary.contains("A1, A2, A3, A4"), "{summary}");
+        // The cell asked about is not one of its own precedents, which the payload above
+        // already shows; the summary names it only as the subject of the question.
+    }
+
+    #[test]
+    fn trace_precedents_says_so_when_there_are_none() {
+        let workspace = testing::workspace();
+        let args = Args::new(&json!({ "path": "chain.xlsx", "cell": "A1" }));
+        let (summary, payload) = trace_precedents(&workspace, &args).unwrap();
+        assert_eq!(payload["precedents"], json!([]));
+        assert!(summary.contains("no precedents"), "{summary}");
+    }
+
+    #[test]
+    fn trace_dependents_covers_the_whole_transitive_closure() {
+        let workspace = testing::workspace();
+        let args = Args::new(&json!({ "path": "chain.xlsx", "cell": "A1" }));
+        let (summary, payload) = trace_dependents(&workspace, &args).unwrap();
+        let affected: Vec<&str> = payload["dependents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        // A5 does not read A1, but it reads A4, which does. Everything downstream breaks.
+        assert_eq!(affected, ["A4", "B1", "A5"]);
+        assert!(summary.contains("3 formulas"), "{summary}");
+    }
+
+    #[test]
+    fn a_cycle_is_reported_as_a_closed_path() {
+        let workspace = testing::workspace();
+        let args = Args::new(&json!({ "path": "cycle.xlsx" }));
+        let (summary, payload) = check_circular_references(&workspace, &args).unwrap();
+        let cycles = payload["cycles"].as_array().unwrap();
+        assert_eq!(cycles.len(), 1, "{payload}");
+        let cells: Vec<&str> = cycles[0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(cells.len(), 4, "three cells plus the return: {cells:?}");
+        assert_eq!(cells.first(), cells.last(), "the path closes: {cells:?}");
+        assert!(summary.contains("->"), "{summary}");
+    }
+
+    #[test]
+    fn a_clean_sheet_reports_no_cycles() {
+        let workspace = testing::workspace();
+        let args = Args::new(&json!({ "path": "chain.xlsx" }));
+        let (summary, payload) = check_circular_references(&workspace, &args).unwrap();
+        assert_eq!(payload["cycles"], json!([]));
+        assert!(summary.contains("No circular"), "{summary}");
+    }
+
+    #[test]
+    fn the_new_tools_are_advertised_with_a_schema() {
+        for name in [
+            "trace_precedents",
+            "trace_dependents",
+            "check_circular_references",
+        ] {
+            let spec =
+                tools::find(name).unwrap_or_else(|| panic!("{name} is not in the catalogue"));
+            assert!(
+                spec.input_schema["properties"]["path"].is_object(),
+                "{name}"
+            );
+        }
+        assert!(
+            tools::find("trace_precedents").unwrap().input_schema["properties"]["cell"].is_object()
+        );
     }
 
     #[test]

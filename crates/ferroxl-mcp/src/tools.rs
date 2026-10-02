@@ -104,6 +104,48 @@ fn build_catalogue() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "trace_precedents",
+            description: "List every cell that feeds a cell, transitively, in the order a \
+                          recalculation would visit them. Use before overwriting a formula \
+                          cell, to find out what its value is actually built from.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("cell", string("A single coordinate, for example \"D10\".")),
+                ],
+                &["path", "cell"],
+            ),
+        },
+        ToolSpec {
+            name: "trace_dependents",
+            description: "List every formula that reads a cell, transitively, and would \
+                          therefore go stale if the cell changed. Use before editing a value \
+                          to see the blast radius.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("cell", string("A single coordinate, for example \"B2\".")),
+                ],
+                &["path", "cell"],
+            ),
+        },
+        ToolSpec {
+            name: "check_circular_references",
+            description: "Report every circular reference in a sheet as a closed path such \
+                          as A1 -> B1 -> C1 -> A1. Excel refuses to calculate a workbook with \
+                          a cycle, so this is worth running before trusting a file you did \
+                          not create.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                ],
+                &["path"],
+            ),
+        },
+        ToolSpec {
             name: "search_values",
             description: "Search a sheet for text. Returns matching cells with their \
                           coordinates and surrounding row context, which is usually enough to \
