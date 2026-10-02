@@ -425,6 +425,71 @@ impl Worksheet {
         crate::worksheet::iter_worksheet::get_range_boundaries(range_string, 0, 1)
     }
 
+    /// A range of this sheet, with optional offsets.
+    ///
+    /// This is openpyxl's `ws["A1:C3"]`, the one indexing form that hands back cells rather
+    /// than values. The offsets expand a bare coordinate into a rectangle, which is what
+    /// openpyxl's `ws["A1", 1, 1]` does, and shift a range that already has a colon.
+    ///
+    /// The distinction comes from the argument's shape, not from a flag: a string with no
+    /// `:` is a coordinate to expand, one with a `:` is a range to move. That is what
+    /// openpyxl means by it, and deciding from the offsets instead would make
+    /// `ws["A1:B2", 1, 1]` two plausible things at once.
+    ///
+    /// ```
+    /// use ferroxl::{CellValue, Workbook};
+    ///
+    /// let mut workbook = Workbook::new();
+    /// let sheet = workbook.active_sheet_mut().unwrap();
+    /// sheet.set("A1", CellValue::number(1.0)).unwrap();
+    ///
+    /// // A bare coordinate with offsets covers a rectangle: A1:B2.
+    /// assert_eq!(sheet.range("A1", Some(1), Some(1)).unwrap().to_string(), "A1:B2");
+    ///
+    /// // Without offsets it is just that one cell.
+    /// assert_eq!(sheet.range("A1", None, None).unwrap().size(), 1);
+    /// ```
+    pub fn range(
+        &self,
+        range_string: &str,
+        row_offset: Option<u32>,
+        column_offset: Option<u32>,
+    ) -> Result<crate::worksheet::cell_range::CellRange> {
+        let parsed = crate::worksheet::cell_range::CellRange::parse(range_string)?;
+        if row_offset.is_none() && column_offset.is_none() {
+            return Ok(parsed);
+        }
+        let rows = row_offset.unwrap_or(0);
+        let columns = column_offset.unwrap_or(0);
+        if range_string.contains(':') {
+            return parsed.shift(columns as i64, rows as i64);
+        }
+        parsed.expand(columns, rows, 0, 0)
+    }
+
+    /// The cells in a range, row by row.
+    ///
+    /// Missing cells come back as `None` so the result is rectangular: a caller indexing
+    /// `[row][column]` never has to check the shape of what it got.
+    pub fn range_cells(
+        &self,
+        range_string: &str,
+        row_offset: Option<u32>,
+        column_offset: Option<u32>,
+    ) -> Result<Vec<Vec<Option<&Cell>>>> {
+        let bounds = self.range(range_string, row_offset, column_offset)?;
+        let mut out = Vec::new();
+        for row in bounds.min_row..=bounds.max_row {
+            let mut cells = Vec::new();
+            for column in bounds.min_col..=bounds.max_col {
+                let coordinate = format!("{}{row}", get_column_letter(column)?);
+                cells.push(self.get_cell(&coordinate));
+            }
+            out.push(cells);
+        }
+        Ok(out)
+    }
+
     /// The coordinates in a range, in row-major order.
     pub fn range_coordinates(&self, range_string: &str) -> Result<Vec<String>> {
         let bounds = self.range_bounds(range_string)?;
@@ -933,6 +998,71 @@ mod tests {
 
     fn sheet() -> Worksheet {
         Worksheet::new("Sheet1").unwrap()
+    }
+
+    #[test]
+    fn a_bare_coordinate_with_offsets_expands_to_a_block() {
+        // `ws["A1", 1, 1]` in openpyxl covers A1:B2 rather than staying one cell, which is
+        // the whole point of the offsets on a bare coordinate.
+        let mut ws = sheet();
+        ws.set("A1", CellValue::number(1.0)).unwrap();
+        ws.set("B2", CellValue::number(4.0)).unwrap();
+
+        let block = ws.range("A1", Some(1), Some(1)).expect("a block");
+        assert_eq!(block.to_string(), "A1:B2");
+        assert_eq!(block.size(), 4);
+
+        let cells = ws.range_cells("A1", Some(1), Some(1)).expect("cells");
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].len(), 2);
+        assert_eq!(
+            cells[0][0].map(|c| c.internal_value().clone()),
+            Some(CellValue::Number(1.0))
+        );
+        // The block is rectangular: the empty cells come back as `None` rather than the row
+        // being short, so `[row][column]` indexing is safe.
+        assert!(cells[0][1].is_none());
+        assert_eq!(
+            cells[1][1].map(|c| c.internal_value().clone()),
+            Some(CellValue::Number(4.0))
+        );
+    }
+
+    #[test]
+    fn no_offsets_leaves_the_range_alone() {
+        let ws = sheet();
+        assert_eq!(ws.range("A1", None, None).expect("one cell").size(), 1);
+        assert_eq!(
+            ws.range("A1:C3", None, None).expect("a block").to_string(),
+            "A1:C3"
+        );
+    }
+
+    #[test]
+    fn offsets_on_a_range_shift_it_rather_than_growing_it() {
+        // Shifting a range and expanding a coordinate are different operations, and the
+        // argument's shape is what says which. Deciding from the offsets instead would make
+        // `ws["A1:B2", 1, 1]` two plausible things at once.
+        let ws = sheet();
+        assert_eq!(
+            ws.range("A1:B2", Some(2), Some(1))
+                .expect("shifted")
+                .to_string(),
+            "B3:C4"
+        );
+    }
+
+    #[test]
+    fn one_offset_extends_that_way_only() {
+        let ws = sheet();
+        assert_eq!(
+            ws.range("A1", Some(2), None).expect("down").to_string(),
+            "A1:A3"
+        );
+        assert_eq!(
+            ws.range("A1", None, Some(2)).expect("across").to_string(),
+            "A1:C1"
+        );
     }
 
     #[test]

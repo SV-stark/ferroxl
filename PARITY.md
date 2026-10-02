@@ -257,22 +257,22 @@ matter.
 rows and a tail so both writers share the serialisation, and the two are tested against
 each other because a streaming writer that emitted different XML would be worse than none.
 
-### 2. Worksheet range with offsets, rows and columns
+### 2. ~~Worksheet range with offsets, rows and columns~~ — shipped in 0.1.4
 
-`Worksheet.range(range_string, row=0, column=0)` returns a two-dimensional grid of
-**`Cell` objects**, which the caller can then mutate. `rows` and `columns` are convenience
-properties built on it.
+`worksheet::cell_range::CellRange` is openpyxl's `worksheet.cell_range.CellRange` as a value:
+`intersection`, `union`, `issubset`, `issuperset`, `isdisjoint`, `contains`, `shift`,
+`expand`, `shrink`, `size`, `top`/`bottom`/`left`/`right`, `rows`, `cols` and `cells`. Bounds
+are inclusive at both ends, which is the opposite of `RangeBounds` and the easiest
+off-by-one in the area.
 
-ferroxl has `range_values(range) -> Vec<Vec<CellValue>>` and
-`range_coordinates(range) -> Vec<String>`, plus `iter_rows()` / `iter_cols()` and their
-explicit-bounds forms. There is no equivalent that hands back a rectangle of `Cell`s, and
-no row/column offset arguments on a `range()`.
+`MultiCellRange` is the `sqref` collection — several disjoint rectangles, as conditional
+formatting applies to. It keeps overlapping ranges separately rather than merging them: a
+caller asking "which rules apply to B2" wants to know they asked twice.
 
-**Effect.** `for row in ws.rows: row[0].value = x` has no direct spelling for writing. The
-same edit is `ws.set(coord, value)` per coordinate, or `ws.set_cell_value(coord, value)`.
-Read-only use is covered by `iter_rows` and `range_values`.
-
-**What to do instead.** Use `range_values` to read and `set` / `set_cell_value` to write.
+`Worksheet::range(range, row_offset, column_offset)` and `Worksheet::range_cells` are
+`ws["A1:C3"]` and friends. The offsets expand a bare coordinate into a rectangle and shift a
+range that already has a colon; the argument's shape decides which, because deciding from the
+offsets would make `ws["A1:B2", 1, 1]` two plausible things.
 
 ### 3. There is no read-only loader
 
@@ -297,13 +297,6 @@ opens this does not matter; for a very large one it would.
 
 **What to do instead.** Nothing today. `ReadOnlyCell` is exercised by tests but is not
 reachable from a loaded workbook.
-
-### 3a. `Worksheet::iter_rows` and `iter_cols`
-
-Shipped in 0.1.3: `iter_rows()` and `iter_cols()` walk the used range row-major and
-column-major, plus `iter_rows_within` / `iter_cols_within` for explicit inclusive bounds.
-This closes the `rows` / `columns` half of [item 2](#2-worksheet-range-with-offsets-rows-and-columns);
-the offset-taking `range()` and the rectangle of `Cell`s it returns are still pending.
 
 ### 4. The stored dimension element is not read
 
@@ -481,15 +474,22 @@ PARITY.md should not have implied otherwise by omitting it.
 
 ### `chart/` — 82 unmatched names of 93
 
-ferroxl has four of thirteen chart types, all 2-D: `BarChart`, `LineChart`, `PieChart`,
-`ScatterChart`. Absent: `AreaChart`, `BubbleChart`, `RadarChart`, `StockChart`,
-`SurfaceChart`, `DoughnutChart`, `ProjectedPieChart`, every 3-D variant, `View3D`,
-`DataLabel`, `Trendline`, `UpDownBars`, `Marker`, `Layout`, `ChartSpace`, `PlotArea`,
-`DataTable`, `Title`/`Text`/`RichText`, `GraphicalProperties`, and the chart reader.
+**All sixteen chart types are ported** as of 0.1.4: `BarChart`, `LineChart`, `PieChart`,
+`ScatterChart`, `AreaChart`, `BubbleChart`, `RadarChart`, `StockChart`, `SurfaceChart`,
+`DoughnutChart`, `ProjectedPieChart`, and the 3-D variants `AreaChart3D`, `BarChart3D`,
+`LineChart3D`, `PieChart3D`, `SurfaceChart3D`. Type-specific options (`radarStyle`,
+`holeSize`, `bubble3D`, `bubbleScale`, `showNegBubbles`, `sizeRepresents`, `firstSliceAng`,
+`wireframe`, `ofPieType`) and `View3D` are ported too, so the remaining gap is decoration
+rather than chart selection.
 
-**Effect.** A user can build a bar, line, pie or scatter chart with axes, a legend, solid
-series colours and one error-bar type. They cannot add a data label, a trendline, a
-title's rich text, a manual layout, a 3-D view, or any other chart type.
+Still absent: `DataLabel`, `Trendline`, `UpDownBars`, `Marker` as a type (a series carries a
+marker *name*, which is most of what it is for), `Layout`/`ManualLayout`, `ChartSpace` as a
+class, `PlotArea`, `DataTable`, `Title`/`Text`/`RichText` as classes, `GraphicalProperties`,
+`BandFormat`, and the chart reader.
+
+**Effect.** A user can build any chart type Excel offers, with axes, a legend, solid series
+colours and one error-bar type. They cannot add a data label, a trendline, a title's rich
+text or a manual layout, and cannot read a chart back.
 
 ### `cell/rich_text.py` and `cell/text.py`
 
@@ -501,15 +501,14 @@ their formatting, which is what openpyxl does when `rich_text=False`.
 openpyxl 3.x's `load_workbook(rich_text=True)` has no counterpart. See the `load_workbook`
 table in [`reader`](#reader--openpyxlreader).
 
-### `worksheet/cell_range.py`
+### `worksheet/cell_range.py` — ported in 0.1.4
 
-`CellRange` and `MultiCellRange`: a rectangular range as a value, with set operations
-(`intersection`, `union`, `issubset`, `issuperset`, `isdisjoint`), `shift`, `expand`,
-`shrink`, `size`, and `rows`/`cols`/`cells`. ferroxl has `RangeBounds`, which is the
-geometry without the algebra.
+`CellRange` and `MultiCellRange` are now `worksheet::cell_range::CellRange` and
+`MultiCellRange`. See [item 2](#2-worksheet-range-with-offsets-rows-and-columns--shipped-in-014).
 
-**Effect.** This is the root of [item 2](#2-worksheet-range-with-offsets-rows-and-columns)
-and of `openpyxl/worksheet/print_settings.py`'s `PrintArea`/`PrintTitles`.
+What is still absent is `openpyxl/worksheet/print_settings.py`, which builds `PrintArea`
+and `PrintTitles` on top of the same two classes. That is now the only reason
+`print_settings.py` is listed here.
 
 ### `worksheet/` remainder
 

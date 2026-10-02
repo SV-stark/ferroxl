@@ -5,6 +5,48 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-10-02
+
+All sixteen chart types, and cell ranges as values.
+
+### Added
+
+- **`worksheet::cell_range::CellRange`** — openpyxl's `worksheet.cell_range.CellRange` as a value rather
+  than a pair of corners: `intersection`, `union`, `issubset`, `issuperset`, `isdisjoint`,
+  `contains`, `shift`, `expand`, `shrink`, `size`, `top`/`bottom`/`left`/`right`, `rows`,
+  `cols` and `cells`. Bounds are inclusive at both ends, the opposite of `RangeBounds` and
+  the easiest off-by-one in the area to get wrong.
+- **`MultiCellRange`** — the `sqref` collection, for conditional formatting that applies to
+  several disjoint rectangles. Overlapping ranges are kept separately rather than merged, so
+  asking "which rules apply to B2" reports both rather than quietly deduplicating.
+- **`Worksheet::range(range, row_offset, column_offset)`** and **`range_cells`** — `ws["A1:C3"]`
+  and friends. A bare coordinate with offsets expands to a rectangle; a range with a colon
+  shifts. The argument's shape decides which, because deciding from the offsets would make
+  `ws["A1:B2", 1, 1]` two plausible things at once.
+- **Twelve chart types**: `AreaChart`, `BubbleChart`, `RadarChart`, `StockChart`,
+  `SurfaceChart`, `DoughnutChart`, `ProjectedPieChart`, and every 3-D variant
+  (`AreaChart3D`, `BarChart3D`, `LineChart3D`, `PieChart3D`, `SurfaceChart3D`). ferroxl had
+  four of thirteen, all 2-D.
+- **`ChartOptions`** and **`View3D`** — the per-type options (`radarStyle`, `holeSize`,
+  `bubble3D`, `bubbleScale`, `showNegBubbles`, `sizeRepresents`, `firstSliceAng`, `wireframe`,
+  `ofPieType`) and the 3-D view.
+- **`Series::with_bubble_size`** and `SeriesAttr::BubbleSizes` — a bubble carries a third
+  column of numbers.
+
+### Fixed
+
+- **`is_graph_chart`** was a three-way allowlist covering only the chart types that existed
+  when it was written, so the twelve new ones were classified as having no axes. It is now
+  the rule it should have been: everything except the pie family has an `axId`.
+- **A one-cell `CellRange` renders as `A1`**, matching openpyxl's `coord`. Rendering it as
+  `A1:A1` would have lengthened every single-cell reference in the workbook on a round trip.
+
+### Changed
+
+- **PARITY.md**: chart types and `worksheet/cell_range.py` move out of the absent list. The
+  remaining chart gap is decoration — data labels, trendlines, up/down bars, manual layouts,
+  rich-text titles — and the chart reader, rather than chart selection.
+
 ## [0.1.3] — 2026-10-02
 
 The first release measured against openpyxl 3.1.5 rather than the 1.9-era surface the
