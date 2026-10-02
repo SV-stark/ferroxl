@@ -5,6 +5,71 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] — 2026-10-02
+
+The silent-loss batch: everything here was read as absent or written from a literal, so a
+workbook using it loaded wrong and saved wrong without saying so.
+
+### Fixed
+
+- **Gradient fills were discarded on read.** The style reader looked only for `<patternFill>`,
+  so a workbook using one loaded with every cell falling back to a plain fill. Nothing failed
+  and nothing warned, and it looked correct — a missing gradient is just a background colour.
+  `Fill` now carries its stops, and `GradientStop` implements `Eq`/`Hash` on the position's
+  bits, because `Fill` needs both to de-duplicate the stylesheet.
+- **Data bars could be neither written nor read.** Three separate places — the reader, the
+  writer, and `is_data_bar`'s documentation — said "openpyxl skips these". The belief came from
+  a half-truth: Excel writes data bars' *extra* properties (gradient fill, border,
+  negative-bar colour, axis) through an `x14` extension, but the bar itself is ordinary
+  `cfRule` content. So the rule was dropped from every workbook containing one.
+- **`cfvo/@gte` was read as absent**, which is not the same as true. The schema defaults it to
+  true, so a rule written `gte="0"` came back including the boundary value it was meant to
+  exclude. Now read, and written only when false.
+- **`iconSet/@percent` was missing** from the attribute list, so an icon set built on
+  percentages came back with its thresholds reinterpreted against the row count — still
+  lighting icons, just the wrong ones.
+- **`Rule/@timePeriod` was missing entirely.** It is the attribute that makes a rule relative
+  to today rather than to the data, so "yesterday" and "last week" rules could not be
+  expressed at all.
+- **`Font.family` was written as a hard-coded 2.** Excel's default font happens to be 2, so it
+  looked deliberate and was wrong for every file using another family index — and the reader
+  could not see the difference, so it could never be recovered.
+- **`Font.scheme` was dropped.** Of the font attributes this changes meaning rather than only
+  appearance: a themed font names a theme slot, so dropping it pins the font to its resolved
+  name and defeats the point of theming.
+- **`<strike>` was never written**, and every underline style except `single` collapsed to a
+  bare `<u/>` — which is what `doubleAccounting` became.
+- **`quotePrefix` and `pivotButton` were not read.** A quote prefix is a style property, not a
+  cell value: it makes Excel display a leading apostrophe rather than treat it as an escape,
+  so dropping it turns a shown `'007` into a number on the next save.
+- **`applyNumberFormat` was not written.** Excel reads the `numFmtId` regardless, which is why
+  nothing looked wrong.
+- **`CellRange` collapses a one-cell range to `A1`**, matching openpyxl's `coord`. Rendering it
+  as `A1:A1` would have lengthened every single-cell reference on a round trip.
+
+### Added
+
+- **`Alignment.relative_indent`, `justify_last_line`, `reading_order`**. `relativeIndent` was
+  read as absent, which turned a hanging indent into a plain one — still an indent, so
+  nothing looked wrong.
+- **`Font.charset`, `family`, `scheme`, `outline`, `shadow`, `condense`, `extend`.**
+- **`Fill::linear_gradient`, `path_gradient`, `GradientStop`, `spread_stops`.**
+- **`DataBar`** and `Rule::data_bar` / `Rule::icon_set`, openpyxl's `DataBarRule` and
+  `IconSetRule`.
+- **`CalcProperties`** — all thirteen of openpyxl's `<calcPr>` fields, with
+  `Workbook::set_calculation_properties`. `fullCalcOnLoad` is load-bearing rather than
+  cosmetic: ferroxl writes formulas with no cached result, so it is what makes Excel calculate
+  them on open instead of showing blanks, and it was not something a caller could change.
+- **Five MCP tools**: `add_data_bar`, `add_icon_set`, `add_table`, `describe_table`,
+  `set_gradient_fill`. 36 to 41.
+
+### Verified
+
+Gradient fills, `Font.family`, `charset`, `scheme`, `outline`, `doubleAccounting` underline and
+`quotePrefix` are each confirmed by loading a ferroxl-written file with **openpyxl 3.1.5** and
+reading the values back. A Rust round trip proves the crate agrees with itself; only the other
+library proves the file agrees with the format.
+
 ## [0.1.5] — 2026-10-02
 
 Excel tables (ListObjects).

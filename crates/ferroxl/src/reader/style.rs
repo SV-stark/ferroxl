@@ -377,6 +377,12 @@ impl StyleTableParser {
                     None => return Err(Error::MissingNumberFormat(format!("{number_format_id}"))),
                 }
             }
+            // `quotePrefix` and `pivotButton` are per-`xf` attributes and were not read at
+            // all. A quote prefix is the one that changes meaning: it makes Excel display a
+            // leading apostrophe rather than treat it as an escape, so dropping it turns a
+            // shown `'007` into a number on the next save.
+            style.quote_prefix = xml_truthy(node.get("quotePrefix"));
+            style.pivot_button = xml_truthy(node.get("pivotButton"));
             if xml_truthy(node.get("applyAlignment")) {
                 if let Some(alignment) = node.find(self.tag("alignment")) {
                     if let Some(value) = alignment.get("horizontal") {
@@ -392,6 +398,22 @@ impl StyleTableParser {
                     }
                     style.alignment.wrap_text = xml_truthy(alignment.get("wrapText"));
                     style.alignment.shrink_to_fit = xml_truthy(alignment.get("shrinkToFit"));
+                    if let Some(relative) = alignment
+                        .get("relativeIndent")
+                        .and_then(|v| v.trim().parse::<i32>().ok())
+                    {
+                        style.alignment.relative_indent = relative;
+                    }
+                    if alignment.get("justifyLastLine").is_some() {
+                        style.alignment.justify_last_line =
+                            Some(xml_truthy(alignment.get("justifyLastLine")));
+                    }
+                    if let Some(order) = alignment
+                        .get("readingOrder")
+                        .and_then(|v| v.trim().parse::<u32>().ok())
+                    {
+                        style.alignment.reading_order = order;
+                    }
                     if let Some(rotation) = alignment
                         .get("textRotation")
                         .and_then(|v| v.trim().parse::<i64>().ok())

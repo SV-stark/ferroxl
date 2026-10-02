@@ -13,7 +13,12 @@ instead.
 
 Parity is real but partial, and `PARITY.md` is the honest accounting: what is ported, what
 differs, and what is not there at all. The largest absences are pivot tables, chart-only
-sheets, named styles, gradient fills and rich text.
+sheets, named styles, and rich text.
+
+`PARITY.md` is measured by `tools/parity.py` against a real checkout of the Python, not
+written from memory. It also says what the audit *cannot* see: the tool matches names, so a
+function that behaves wrongly and an XML element that is silently dropped both read as
+matched. Every field-level loss in it was found by reading both trees.
 
 ```
 crates/

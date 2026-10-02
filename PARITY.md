@@ -43,16 +43,16 @@ gap by a wide margin; the numbers here are from a run against 3.1.5.
 | --- | --- |
 | openpyxl top-level names audited | 994 |
 | Modules whose every public name is matched | 31 of 183 |
-| Names with no ferroxl counterpart | 741 |
+| Names with no ferroxl counterpart | 729 |
 
 Unmatched names, by upstream package:
 
 | Package | Unmatched | What it is |
 | --- | --- | --- |
-| `drawing/` | 127 | Shape geometry and the `spPr` tree; ferroxl has image sizing only |
-| `worksheet/` | 124 | Tables, views, cell ranges, filters, OLE, scenarios, print ranges |
-| `styles/` | 100 | Named styles, gradient fills, `StyleArray`, table styles, dxf extras |
-| `chart/` | 82 | Nine of thirteen chart types, labels, trendlines, layout, 3-D |
+| `drawing/` | 126 | Shape geometry and the `spPr` tree; ferroxl has image sizing only |
+| `worksheet/` | 117 | Views, filters, OLE, scenarios, print ranges, array formulas |
+| `styles/` | 100 | Named styles, `StyleArray`, table styles, dxf extras |
+| `chart/` | 81 | Data labels, trendlines, layouts, rich-text titles, the chart reader |
 | `pivot/` | 58 | The whole pivot table and pivot cache model |
 | `descriptors/` | 49 | The `Serialisable` base and the typed descriptor system |
 | `xml/` | 41 | Namespace registration, `iterparse`, tag constants |
@@ -551,18 +551,27 @@ type, and the query-table and xml table types.
 | `web.py`, `smart_tags.py`, `function_group.py` | Web publishing, smart tags, function groups |
 | `defined_name.py` | `workbook/defined_name.py` is a *different* type from the `namedrange.py` one ferroxl ports. `comment`, `description`, `help`, `statusBar`, `hidden`, `function` and nine more are unreachable, as is `RESERVED` / `_xlnm.` handling |
 
+### Shipped in 0.1.6
+
+- **`GradientFill`, `Stop`, `StopList`** — `Fill::linear_gradient`, `Fill::path_gradient`,
+  `GradientStop`, `spread_stops`. The reader had been discarding `<gradientFill>` entirely.
+- **`DataBar`** and the `Rule::data_bar` / `Rule::icon_set` factories.
+- **`cfvo/@gte`, `iconSet/@percent`, `Rule/@timePeriod`**, all previously absent from the
+  attribute lists.
+- **`Font.charset`, `family`, `scheme`, `outline`, `shadow`, `condense`, `extend`** and
+  **`Alignment.relativeIndent`, `justifyLastLine`, `readingOrder`.**
+- **`quotePrefix` and `pivotButton`** on `Style`.
+- **`CalcProperties`** — all thirteen `<calcPr>` fields.
+
 ### `styles/` remainder
 
 | Module | What a user cannot do |
 | --- | --- |
 | `named_styles.py`, `builtins.py` | `cell.style = "Good"` — the 50 built-in named styles and `NamedStyle` itself. ferroxl writes one hard-coded `Normal` `cellStyle` and does not read `<cellStyles>` |
-| `fills.py::GradientFill` | Define a gradient fill. Worse, the reader **discards** `<gradientFill>` elements — silent loss on round trip |
-| `cell_style.py` | `StyleArray`; `<cellStyleXfs>` is not read at all, and `xfId`, `quotePrefix`, `pivotButton` and `applyNumberFormat` are not read from `<cellXfs>` |
+| `cell_style.py` | `StyleArray` as a class, and `<cellStyleXfs>` is not read at all. `quotePrefix`, `pivotButton` and `applyNumberFormat` **are** now read and written (0.1.6); `xfId` is not |
 | `proxy.py::StyleProxy` | The read-only style proxy that makes `cell.font` non-assignable |
 | `table.py` | Custom table styles |
 | `differential.py` | `dxf` cannot change number format, alignment or protection — only font, fill and border |
-| `fonts.py` | `Font.charset`, `family`, `scheme`, `outline`, `shadow`, `condense`, `extend` are not modelled, and the reader drops them |
-| `alignment.py` | `relativeIndent`, `justifyLastLine`, `readingOrder` |
 | `colors.py` | `RgbColor`; `<colors>`/`<indexedColors>` is read but never written |
 | `numbers.py` | Built-in format ids 48 (`##0.0E+0`) and 49 (`@`) are missing, so `is_builtin("@")` is false |
 

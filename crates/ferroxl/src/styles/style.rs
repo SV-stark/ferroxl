@@ -31,6 +31,13 @@ pub struct Style {
     /// This flag is bookkeeping, not part of the visual style: two styles differing only in
     /// `is_static` render identically, so equality and hashing ignore it.
     pub is_static: bool,
+    /// Whether a leading apostrophe is shown rather than treated as an escape.
+    ///
+    /// A style property rather than a cell value: it changes how Excel reads the cell's text,
+    /// so losing it on a round trip turns a displayed `'007` into a number.
+    pub quote_prefix: bool,
+    /// Whether the cell shows the pivot-table filter button.
+    pub pivot_button: bool,
 }
 
 impl PartialEq for Style {
@@ -69,6 +76,8 @@ impl Style {
     pub fn static_style() -> Self {
         Style {
             is_static: true,
+            quote_prefix: false,
+            pivot_button: false,
             ..Style::default()
         }
     }
@@ -83,12 +92,26 @@ impl Style {
             number_format: self.number_format.clone(),
             protection: self.protection,
             is_static: false,
+            quote_prefix: self.quote_prefix,
+            pivot_button: self.pivot_button,
         }
     }
 
     /// The number format code applied to this style.
     pub fn number_format_code(&self) -> &str {
         self.number_format.format_code()
+    }
+
+    /// Show a leading apostrophe rather than treating it as an escape.
+    pub fn with_quote_prefix(mut self, quote_prefix: bool) -> Self {
+        self.quote_prefix = quote_prefix;
+        self
+    }
+
+    /// Show the pivot-table filter button on this cell.
+    pub fn with_pivot_button(mut self, pivot_button: bool) -> Self {
+        self.pivot_button = pivot_button;
+        self
     }
 
     /// Replace the number format code.

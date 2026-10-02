@@ -521,6 +521,12 @@ fn write_cell_xfs(root: &mut Element, tables: &StyleTables) {
         node.set("fillId", "0");
         node.set("xfId", "0");
         node.set("borderId", "0");
+        // The number format's id is always written, but the flag that says to apply it was
+        // not. Excel reads the id regardless, which is why nothing looked wrong -- and a
+        // stricter reader would show a cell with the wrong format.
+        if style.number_format != default.number_format {
+            node.set("applyNumberFormat", "1");
+        }
         if style.font != default.font {
             node.set("fontId", fonts.get(&style.font).unwrap_or(&0).to_string());
             node.set("applyFont", "1");
@@ -531,6 +537,15 @@ fn write_cell_xfs(root: &mut Element, tables: &StyleTables) {
                 borders.get(&style.borders).unwrap_or(&0).to_string(),
             );
             node.set("applyBorder", "1");
+        }
+        // A quote prefix is a *style* property, not a cell value: it makes Excel treat a
+        // leading apostrophe as part of the display rather than as text that was escaped.
+        // It has to survive a round trip or a numeric-looking string changes meaning.
+        if style.quote_prefix {
+            node.set("quotePrefix", "1");
+        }
+        if style.pivot_button {
+            node.set("pivotButton", "1");
         }
         if style.fill != default.fill {
             node.set("fillId", fills.get(&style.fill).unwrap_or(&0).to_string());
