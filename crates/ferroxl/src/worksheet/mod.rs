@@ -4,6 +4,7 @@
 // Python module it mirrors.
 #![allow(clippy::module_inception)]
 
+pub mod dependency;
 pub mod dimensions;
 pub mod filters;
 pub mod header_footer;
@@ -14,6 +15,7 @@ pub mod protection;
 pub mod relationship;
 pub mod worksheet;
 
+pub use dependency::References;
 pub use dimensions::{ColumnDimension, Dimension, RowDimension};
 pub use filters::{AutoFilter, FilterColumn, SortCondition};
 pub use header_footer::{HeaderFooter, HeaderFooterItem};

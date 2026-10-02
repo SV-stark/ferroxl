@@ -347,8 +347,11 @@ impl Worksheet {
     pub fn get_style_mut(&mut self, coordinate: &str) -> Result<&mut Style> {
         // Python's `_cells` and `_styles` are populated together: reading a style for a
         // coordinate that has no cell yet creates an empty one, which is why the writer can
-        // attach a style to a blank cell.
-        self.create_cell(coordinate)?;
+        // attach a style to a blank cell. Row-level ("12") and column-level ("C") styles do
+        // not create a cell.
+        if coordinate_from_string(coordinate).is_ok() {
+            self.create_cell(coordinate)?;
+        }
         let entry = self.styles.entry(coordinate.to_string()).or_default();
         if entry.is_static {
             *entry = entry.copy_style();
@@ -363,7 +366,9 @@ impl Worksheet {
 
     /// Attach a style to a coordinate.
     pub fn set_style(&mut self, coordinate: &str, style: Style) -> Result<()> {
-        self.create_cell(coordinate)?;
+        if coordinate_from_string(coordinate).is_ok() {
+            self.create_cell(coordinate)?;
+        }
         self.styles.insert(coordinate.to_string(), style);
         Ok(())
     }
