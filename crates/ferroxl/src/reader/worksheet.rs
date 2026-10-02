@@ -516,10 +516,10 @@ impl WorksheetParser<'_, '_> {
             let Some(rule_type) = rule_node.get("type") else {
                 continue;
             };
-            // Data bars need a drawing extension openpyxl does not write.
-            if rule_type == "dataBar" {
-                continue;
-            }
+            // Data bars used to be skipped here, on the belief that they need a drawing
+            // extension openpyxl does not write. That is true only of the extra properties --
+            // gradient fill, border, negative-bar colour, axis. The bar itself is ordinary
+            // cfRule content, so skipping it dropped the rule from a loaded workbook entirely.
             let mut rule = Rule::new(rule_type);
             for attribute in RULE_ATTRIBUTES {
                 if let Some(value) = rule_node.get(attribute) {

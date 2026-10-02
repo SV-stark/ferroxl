@@ -146,6 +146,92 @@ fn build_catalogue() -> Vec<ToolSpec> {
             ),
         },
         ToolSpec {
+            name: "add_data_bar",
+            description: "Add a data-bar conditional format: a bar drawn behind each cell \
+                          in a range, scaled between two thresholds. Use when a column of \
+                          numbers needs magnitude shown in place rather than read.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("range", string("A1 range to apply the rule to, e.g. \"B2:B200\".")),
+                    ("color", string("Bar colour as RRGGBB, e.g. \"638EC6\". Defaults to Excel's blue.")),
+                    ("start_type", string("Lowest threshold kind: \"min\", \"num\" or \"percent\".")),
+                    ("start_value", string("Lowest threshold's value.")),
+                    ("end_type", string("Highest threshold kind: \"max\", \"num\" or \"percent\".")),
+                    ("end_value", string("Highest threshold's value.")),
+                    ("show_value", boolean("Whether the cell's value stays visible beside the bar.")),
+                ],
+                &["path", "range"],
+            ),
+        },
+        ToolSpec {
+            name: "add_icon_set",
+            description: "Add an icon-set conditional format: three or more icons lit \
+                          according to a value's position in the range. Use for at-a-glance \
+                          status where a bar's precision does not matter.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("range", string("A1 range to apply the rule to.")),
+                    ("style", string("Icon set name, e.g. \"3TrafficLights1\" or \"3Arrows\".")),
+                    ("percent", boolean("Whether the thresholds are percentages rather than counts.")),
+                    ("reverse", boolean("Whether to reverse the icon order.")),
+                    ("show_value", boolean("Whether the cell's value stays visible beside the icons.")),
+                ],
+                &["path", "range"],
+            ),
+        },
+        ToolSpec {
+            name: "add_table",
+            description: "Define an Excel table (ListObject) over a range, reading its column \
+                          names from the header row. Use for filtering, banding and \
+                          structured references such as =SUM(Total[Sales]).",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("range", string("A1 range the table covers, e.g. \"A1:C100\".")),
+                    ("name", string("Table name. May not contain a space.")),
+                    ("style", string("Built-in style name, e.g. \"TableStyleMedium9\".")),
+                    ("header_row", boolean("Whether the first row holds the column names.")),
+                    ("totals_row", boolean("Whether to show a totals row.")),
+                ],
+                &["path", "range", "name"],
+            ),
+        },
+        ToolSpec {
+            name: "describe_table",
+            description: "Describe an Excel table: its range, columns, header and totals \
+                          settings, and style. Use before editing one, and to answer which \
+                          cells a structured reference covers.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("name", string("Table name.")),
+                ],
+                &["path", "name"],
+            ),
+        },
+        ToolSpec {
+            name: "set_gradient_fill",
+            description: "Fill a cell or range with a two-colour gradient. Use when a single \
+                          flat colour would lose information a gradient shows.",
+            input_schema: object(
+                &[
+                    ("path", string("Path to the workbook.")),
+                    ("sheet", string("Sheet name. Defaults to the first sheet.")),
+                    ("range", string("A1 range to fill.")),
+                    ("start_color", string("First colour as RRGGBB.")),
+                    ("end_color", string("Second colour as RRGGBB.")),
+                    ("direction", string("Either linear or path. A path gradient radiates from the centre.")),
+                ],
+                &["path", "range", "start_color", "end_color"],
+            ),
+        },
+        ToolSpec {
             name: "search_values",
             description: "Search a sheet for text. Returns matching cells with their \
                           coordinates and surrounding row context, which is usually enough to \

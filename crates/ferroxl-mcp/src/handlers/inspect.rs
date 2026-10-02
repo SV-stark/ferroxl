@@ -287,6 +287,51 @@ fn join_capped(cells: &[String]) -> String {
     )
 }
 
+/// Describe one Excel table: its range, columns and style.
+pub fn describe_table(workspace: &Workspace, args: &Args) -> Handled {
+    let workbook = open(workspace, args)?;
+    let index = sheet_index(&workbook, args)?;
+    let sheet = &workbook.worksheets[index];
+    let name = args.require_str("name")?;
+    let table = sheet
+        .table(&name)
+        .ok_or_else(|| format!("{name} is not a table on this sheet"))?;
+
+    let columns: Vec<serde_json::Value> = table
+        .columns
+        .iter()
+        .map(|column| {
+            json!({
+                "name": column.name,
+                "totals_function": column.totals_row_function,
+                "totals_label": column.totals_row_label,
+                "formula": column.calculated_column_formula.as_ref().map(|f| f.text.clone()),
+            })
+        })
+        .collect();
+
+    let summary = format!(
+        "{name} covers {} with {} columns ({})",
+        table.reference,
+        table.columns.len(),
+        table.column_names().join(", ")
+    );
+    Ok((
+        summary,
+        json!({
+            "sheet": sheet.title,
+            "name": table.formula_name(),
+            "display_name": table.display_name,
+            "ref": table.reference,
+            "header_rows": table.header_row_count,
+            "totals_row_shown": table.totals_row_shown,
+            "style": table.style_info.name,
+            "row_stripes": table.style_info.show_row_stripes,
+            "columns": columns,
+        }),
+    ))
+}
+
 /// Search a sheet for text.
 pub fn search_values(workspace: &Workspace, args: &Args) -> Handled {
     let workbook = open(workspace, args)?;
