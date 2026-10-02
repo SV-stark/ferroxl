@@ -1,0 +1,211 @@
+# Release automation.
+#
+# Pushing a tag of the form `v1.9.0` builds `lexcel-mcp` for every supported target and
+# attaches the archives to a GitHub release. The library `lexcel` has no binary, so there
+# is one artifact per target rather than one per crate.
+#
+# The tag is the source of truth. `Cargo.toml` carries the version, and the two are
+# expected to agree; the `Verify the tag matches the manifest` step makes a mismatch a
+# failure rather than a release whose filename lies about what is inside it.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Creating a release needs write access to the repository contents. Set to read by default
+# so a workflow change cannot do more than it needs to.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build for ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-build
+
+      - name: Verify the tag matches the manifest
+        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match version ${version} in Cargo.toml"
+            exit 1
+          fi
+          echo "releasing ${version}"
+
+      - name: Build
+        run: cargo build --release --locked --bin lexcel-mcp --target ${{ matrix.target }}
+
+      # A binary that does not print its version is not a release. This also catches a
+      # target/architecture mismatch, which otherwise shows up as a mystery crash report.
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="target/${{ matrix.target }}/release"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "$dir/lexcel-mcp.exe" --version
+          else
+            "$dir/lexcel-mcp" --version
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dir="target/${{ matrix.target }}/release"
+          staging="staging-${{ matrix.target }}"
+          artifact="lexcel-mcp-${version}-${{ matrix.target }}.${{ matrix.archive }}"
+
+          mkdir -p "dist/$staging"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$dir/lexcel-mcp.exe" "dist/$staging/"
+          else
+            cp "$dir/lexcel-mcp" "dist/$staging/"
+          fi
+          # Ship the licence and the README next to the binary: a redistributable binary
+          # without its licence is a licence violation.
+          cp README.md LICENSE "dist/$staging/"
+
+          # Everything below runs from inside dist/, so the archive and the staging
+          # directory are both addressed relative to it. `7z` in particular resolves its
+          # output path against the current directory, not against the invocation.
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a -tzip -bso0 -bsp0 "$artifact" "$staging/*"
+          else
+            tar -czf "$artifact" "$staging"
+          fi
+
+          # A per-target checksum, so a downloader can verify one archive without waiting
+          # for the release-wide SHA256SUMS assembled in the checksums job.
+          sha256sum "$artifact" > "$artifact.sha256"
+          echo "built $artifact"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lexcel-mcp-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  checksums:
+    name: Assemble the checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # Concatenate the per-target checksums into one file. The paths inside are
+          # already archive-relative, so the result works from a downloaded release.
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Verify the archives are intact
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum --check --quiet SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish the release
+    needs: [build, checksums]
+    runs-on: ubuntu-latest
+    permissions:
+      # Only this job needs to write; the build jobs above only need to read.
+      contents: write
+    steps:
+      - name: Download every artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Draft the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Draft first, so a failure in a later step does not leave a half-populated
+          # release in front of users.
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          fail_on_unmatched_files: true
+
+      - name: Verify the release is complete
+        run: |
+          set -euo pipefail
+          expected=5   # one per matrix target
+          count=$(find artifacts -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)
+          if [ "$count" -ne "$expected" ]; then
+            echo "::error::expected ${expected} archives, found ${count}"
+            find artifacts -maxdepth 1 -type f
+            exit 1
+          fi
+          echo "${count} archives ready"
+
+      - name: Publish
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        env:
+          GH_TOKEN: ${{ github.token }}

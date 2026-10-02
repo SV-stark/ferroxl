@@ -30,6 +30,7 @@ crates/
 - [Differences from openpyxl](#differences-from-openpyxl)
 - [The MCP server](#the-mcp-server)
 - [Development](#development)
+- [Continuous integration and releases](#continuous-integration-and-releases)
 - [License](#license)
 
 ## Installation
@@ -391,7 +392,10 @@ a tool that silently drops an argument is worse than one that refuses.
 
 ```console
 $ cargo build --workspace                  # build
-$ cargo test --workspace                   # 480 tests
+$ cargo test --workspace                   # 481 tests
+$ cargo nextest run --workspace            # the same tests, in parallel; this is what CI runs
+$ cargo clippy --workspace --all-targets -- -D warnings
+$ cargo fmt --all --check
 $ cargo doc --workspace                    # API documentation
 $ python tools/check_readme.py             # the README examples are the doctests
 $ python tools/parity.py ../openpyxl        # audit the public surface against openpyxl
@@ -409,6 +413,46 @@ were all checked against openpyxl or `jdcal` and the result pinned in a test.
 The workspace is verified against real openpyxl: files this library writes are opened with
 openpyxl 3.x and the values, styles, merges, validations, comments, names and freeze panes
 are compared.
+
+## Continuous integration and releases
+
+Two workflows under `.github/workflows`.
+
+**`ci.yml`** runs on every push to `main` and every pull request, in three jobs:
+
+- **checks** -- `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo doc` with
+  `RUSTDOCFLAGS: -D warnings`, and `tools/check_readme.py`, which fails if a README example
+  has drifted from the doctest it mirrors.
+- **test** -- `cargo nextest run --workspace --no-fail-fast` on Linux, Windows and macOS,
+  then `cargo test --doc` separately. nextest does not run doctests, so without that second
+  step the README examples would quietly stop being verified.
+- **msrv** -- `cargo check` on whatever `rust-version` says in `Cargo.toml`, read from the
+  manifest so the job cannot pass on a toolchain older than the one the crate promises.
+
+The dependency cache is shared across the matrix, so the first job to finish warms it for
+the rest.
+
+**`release.yml`** runs when a tag of the form `v1.9.0` is pushed. It builds `lexcel-mcp`
+for five targets:
+
+| Target | Archive |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | `tar.gz` |
+| `aarch64-unknown-linux-gnu` | `tar.gz` |
+| `x86_64-pc-windows-msvc` | `zip` |
+| `x86_64-apple-darwin` | `tar.gz` |
+| `aarch64-apple-darwin` | `tar.gz` |
+
+Each archive carries the binary with `LICENSE` and `README.md` beside it -- a
+redistributable binary without its licence is a licence violation. A build that cannot
+print `--version` fails rather than shipping. The tag is checked against the version in
+`Cargo.toml`, so a filename cannot lie about what is inside it. The per-target `.sha256`
+files are combined into one `SHA256SUMS` and verified before anything is published, and the
+release is drafted first and only published once the file count matches the matrix.
+
+```console
+$ git tag v1.9.0 && git push origin v1.9.0
+```
 
 ## License
 

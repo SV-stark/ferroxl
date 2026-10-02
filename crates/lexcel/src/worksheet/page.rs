@@ -5,8 +5,10 @@
 pub struct PageSetup {
     /// `portrait` or `landscape`.
     pub orientation: Option<String>,
-    /// The paper size code. [`crate::worksheet::worksheet::PAPERSIZES`] maps each of
-    /// openpyxl's `PAPERSIZE_*` names to the digit OOXML stores here.
+    /// The paper size code.
+    ///
+    /// [`PAPERSIZES`](crate::worksheet::Worksheet::PAPERSIZES) maps each of openpyxl's
+    /// `PAPERSIZE_*` names to the digit OOXML stores here.
     pub paper_size: Option<String>,
     /// Print scaling percentage.
     pub scale: Option<String>,

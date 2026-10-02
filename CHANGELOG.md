@@ -89,6 +89,16 @@ Each of these is documented at the call site as well as in the README.
 - Images are read for their dimensions by parsing the PNG header, so PNG is the only
   supported format and PIL is not a dependency. The image bytes are stored verbatim.
 
+### Automation
+
+- `.github/workflows/ci.yml` -- on every push and pull request: `cargo fmt --check`,
+  `cargo clippy -- -D warnings`, `cargo doc` with warnings denied, `cargo nextest run` on
+  Linux, Windows and macOS, doctests as a separate step, and an MSRV job that reads
+  `rust-version` from `Cargo.toml` so the two cannot drift apart.
+- `.github/workflows/release.yml` -- on a `v*` tag: builds `lexcel-mcp` for five targets,
+  packages each with its licence and README, assembles and verifies `SHA256SUMS`, and
+  publishes a draft release only once every archive is present.
+
 ### Verification
 
 - 481 tests: 369 unit tests and 110 in the MCP server, plus two doctests.

@@ -1,0 +1,124 @@
+# Continuous integration for lexcel.
+#
+# Two things are checked, and they are checked separately because they fail for different
+# reasons: `checks` is fast and opinionated about style, `test` is slow and only cares
+# whether the code is correct on each platform. A failure in one should not hide the other.
+#
+# `cargo nextest` runs the tests. Note that nextest does not run doctests, so the doctests
+# are a separate step -- silently skipping them would leave the README examples unverified.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the in-flight run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Formatting, lints and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-checks
+
+      # `--locked` fails if Cargo.lock would change, which is how a dependency bump
+      # arrives without an unexplained lockfile edit.
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
+      # The README's Rust examples are the crate's own doctests, so a drifted example
+      # fails the build. This asserts the two have not diverged.
+      - name: The README examples are the doctests
+        run: python tools/check_readme.py
+
+      # `tools/parity.py` audits the public surface against openpyxl, but it needs a
+      # checkout of the Python original, which is not a dependency of this project. Run it
+      # locally with `python tools/parity.py path/to/openpyxl/openpyxl`.
+
+  test:
+    name: Tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not cancel the others: the point of a matrix is to see
+      # everything that is broken, not the first thing that broke.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Every platform builds the same dependency graph, so the cache is shared and the
+          # first job to finish warms it for the rest.
+          shared-key: ci-tests
+
+      - name: Run the tests
+        run: cargo nextest run --workspace --locked --no-fail-fast
+        env:
+          RUST_BACKTRACE: 1
+
+      # nextest runs test binaries, not documentation examples.
+      - name: Run the doctests
+        run: cargo test --doc --workspace --locked
+
+  msrv:
+    name: Builds on the declared minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Read from Cargo.toml rather than repeating the number here, so the job cannot
+      # quietly pass on a toolchain older than the one the manifest promises to support.
+      - name: Read the minimum supported version
+        id: msrv
+        run: echo "version=$(grep -m1 'rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust ${{ steps.msrv.outputs.version }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-msrv
+
+      # `check`, not `test`: this job exists to prove the code compiles on the oldest
+      # supported compiler. The test suite runs on stable above.
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
