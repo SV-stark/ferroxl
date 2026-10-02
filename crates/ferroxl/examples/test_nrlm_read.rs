@@ -4,10 +4,10 @@
 //! - Audits formula dependency graphs and circular reference detection
 //! - Strictly read-only: does not modify or write to any target file
 
+use ferroxl::CellValue;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use ferroxl::CellValue;
 
 fn find_excel_files(dir: &Path, list: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
@@ -36,7 +36,11 @@ fn main() {
     find_excel_files(target_dir, &mut files);
     files.sort();
 
-    println!("Testing ferroxl v0.1.2 (read-only) on {} Excel workbooks in {:?}", files.len(), target_dir);
+    println!(
+        "Testing ferroxl v0.1.2 (read-only) on {} Excel workbooks in {:?}",
+        files.len(),
+        target_dir
+    );
     println!("{:-<120}", "");
     println!(
         "{:<4} | {:<52} | {:<6} | {:<8} | {:<8} | {:<6} | {:<7} | {:<10}",
@@ -66,7 +70,8 @@ fn main() {
         };
 
         let file_start = Instant::now();
-        let result = ferroxl::load_workbook(file_path.to_str().unwrap(), ferroxl::LoadOptions::default());
+        let result =
+            ferroxl::load_workbook(file_path.to_str().unwrap(), ferroxl::LoadOptions::default());
 
         match result {
             Ok(wb) => {
@@ -157,7 +162,10 @@ fn main() {
     }
     println!("  Total Execution Time     : {:.2?}", total_elapsed);
     if !files.is_empty() {
-        println!("  Average Time per File    : {:.2?}", total_elapsed / files.len() as u32);
+        println!(
+            "  Average Time per File    : {:.2?}",
+            total_elapsed / files.len() as u32
+        );
     }
     println!("{:-<120}", "");
 }
