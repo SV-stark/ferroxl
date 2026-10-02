@@ -4,6 +4,7 @@
 //! `workbook.rs` handles workbook-level metadata, `worksheet.rs` parses sheets, `style.rs`
 //! the shared styles and `strings.rs`/`comments.rs` the remaining parts.
 
+pub mod archive;
 pub mod comments;
 pub mod excel;
 pub mod strings;

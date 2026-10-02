@@ -321,12 +321,22 @@ element, so they move with the cells.
 
 ### 5. Zip central directory repair
 
-When a workbook fails to open, openpyxl searches for the end-of-central-directory
-signature and truncates whatever follows it, then retries. This recovers files truncated in
-transit or with junk appended.
+**Resolved.** This entry was wrong in both directions, and measuring it is what showed that.
 
-**Effect.** A slightly damaged file that openpyxl would open, ferroxl rejects with
-`Error::BadZipFile`.
+The gap was described as openpyxl scanning for the end-of-central-directory signature to
+tolerate junk appended after it. ferroxl never needed that: the zip crate locates the record by
+scanning backwards, so a 4 kB tail of zeroes, a stray `<html>404</html>`, and even a *prepended*
+UTF-8 BOM all load. There was never a defect here, and the entry described a bug that did not
+exist.
+
+What was actually missing was the neighbouring case: an end-of-central-directory record cut off
+by an interrupted download. The central directory is written before that record, so such a file
+is reconstructible, and `reader::archive` now walks the directory and rebuilds the missing 22
+bytes. `crates/ferroxl/tests/archive_check.rs` covers it end to end.
+
+**Effect.** A workbook whose trailing record was truncated now loads, cells and all. A file
+truncated *into* the central directory is still refused, because no record can describe it, and
+a wrong one would produce a file that opens and shows the wrong sheets.
 
 ### 6. Charts and images are written but not read back
 

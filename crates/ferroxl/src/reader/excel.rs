@@ -12,6 +12,7 @@ use zip::ZipArchive;
 
 use crate::cell::cell::CellContext;
 use crate::exceptions::{Error, Result};
+use crate::reader::archive;
 use crate::reader::comments::{comments_file_path, read_comments};
 use crate::reader::strings::read_string_table;
 use crate::reader::style::read_style_table;
@@ -142,6 +143,13 @@ fn load_from_path(path: &Path, options: LoadOptions) -> Result<Workbook> {
 }
 
 fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
+    // An archive whose trailing records were cut off is rebuilt first. `None` means it was
+    // already fine, which is the normal case and the one that avoids a second copy.
+    let repaired = archive::repair(bytes.to_vec())?;
+    let bytes: &[u8] = match repaired {
+        None => bytes,
+        Some(ref fixed) => fixed.as_slice(),
+    };
     let mut archive = ZipArchive::new(Cursor::new(bytes.to_vec()))
         .map_err(|e| Error::InvalidFile(e.to_string()))?;
     let names: Vec<String> = (0..archive.len())
@@ -217,7 +225,9 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
     };
 
     for (index, sheet) in sheets.iter().enumerate() {
-        let part_path = format!("xl/{}", sheet.path);
+        // `detect_worksheets` already resolved the relationship target against `xl/`, so
+        // prefixing again would look for `xl/xl/worksheets/sheet1.xml`.
+        let part_path = sheet.path.clone();
         let Some(data) = read_part(&mut archive, &part_path) else {
             continue;
         };
@@ -279,11 +289,7 @@ fn detect_parts(
     // Skip relationships that point at parts the archive does not contain.
     Ok(detected
         .into_iter()
-        .filter(|sheet| {
-            names
-                .iter()
-                .any(|name| name == &format!("xl/{}", sheet.path))
-        })
+        .filter(|sheet| names.iter().any(|name| name == &sheet.path))
         .collect())
 }
 

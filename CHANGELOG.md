@@ -9,6 +9,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`reader::archive`** rebuilds a zip whose end-of-central-directory record was cut off, which
+  is what an interrupted download leaves behind. The central directory is written before that
+  record, so the archive is usually recoverable: the directory is walked for its entry count,
+  size and offset, and the missing 22 bytes are synthesised. Every cut point inside the record
+  is covered, down to the two bytes `PK` left by a 20-byte cut.
+- **Relationship targets are resolved rather than assumed.** `resolve_part` walks `.` and `..`
+  and honours a leading slash, so a generator that writes `Target="/xl/worksheets/sheet1.xml"`
+  or `Target="../xl/worksheets/sheet1.xml"` is read instead of losing the sheet.
+
 - **Named styles.** `NamedStyle`, `NamedStyleList` and `Workbook::named_styles` cover
   `openpyxl.styles.named_styles`. `<cellStyles>` and `<cellStyleXfs>` are read and written,
   so a workbook's own styles survive a round trip instead of every cell arriving as `Normal`.
@@ -24,6 +33,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A sheet could vanish with no error at all.** `detect_worksheets` built the part name by
+  prefixing `xl/` onto the relationship target, so a generator that writes the target as
+  absolute (`/xl/worksheets/sheet1.xml`) or with a hop back out of `xl/`
+  (`../xl/worksheets/sheet1.xml`) produced `xl//xl/worksheets/sheet1.xml`. That matched no
+  content type, the sheet was dropped, and the workbook opened empty -- no exception, no
+  warning. `resolve_part` now resolves the target properly, and the path it returns is the
+  final name, so the two callers that used to prefix `xl/` again no longer do.
 - **`cellXfs` wrote `xfId="0"` unconditionally**, so every cell claimed to derive from `Normal`
   and openpyxl reported `cell.style` as `'Normal'` even for a cell carrying `Good`'s colours.
   A cell whose formatting matches a named style now points at it; one the user has altered

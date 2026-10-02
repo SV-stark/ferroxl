@@ -35,18 +35,12 @@ pub fn comments_file_path(
 }
 
 /// Normalise `..` segments in a part path, as `os.path.normpath` would.
+///
+/// A comment part's relationship target is spelled several ways by different generators, so
+/// this shares [`resolve_part`] rather than keeping a second copy of the same segment walk.
+/// An empty base directory makes the target absolute, which a comment path already is.
 fn normalise(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    parts.join("/")
+    crate::reader::workbook::resolve_part("", path)
 }
 
 /// Read the author list from a comments part.

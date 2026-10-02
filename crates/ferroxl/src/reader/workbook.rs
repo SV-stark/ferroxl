@@ -28,6 +28,9 @@ pub const DISCARDED_RANGES: [&str; 2] = ["Excel_BuiltIn", "Print_Area"];
 pub const VALID_WORKSHEET: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml";
 
+/// The directory the workbook's relationships are resolved against.
+pub const WORKBOOK_PART_DIR: &str = "xl";
+
 /// Read the core document properties.
 pub fn read_properties_core(xml_source: &[u8]) -> Result<DocumentProperties> {
     let root = fromstring(xml_source)?;
@@ -169,8 +172,51 @@ pub fn read_sheets(xml_source: &[u8]) -> Result<Vec<(String, usize)>> {
 pub struct DetectedSheet {
     /// The sheet title.
     pub title: String,
-    /// The path of the sheet part relative to `xl/`.
+    /// The sheet part's path in the archive, already resolved against `xl/`.
+    ///
+    /// Prefixed again by a caller this becomes `xl/xl/worksheets/sheet1.xml` and the sheet
+    /// disappears, so treat it as the final name rather than as a still-relative target.
     pub path: String,
+}
+
+/// Resolve a relationship target to a part name inside the package.
+///
+/// A `Target` is relative to the part holding the `.rels` file -- `xl/` for the workbook -- and
+/// generators disagree about how to say so. All of these name `xl/worksheets/sheet1.xml`:
+///
+/// - `worksheets/sheet1.xml` (the usual form Excel writes)
+/// - `/xl/worksheets/sheet1.xml` (absolute from the package root)
+/// - `../xl/worksheets/sheet1.xml` (relative, with a hop back out of `xl/` first)
+/// - `/xl/./worksheets/../worksheets/sheet1.xml` (absolute, with detours)
+///
+/// Assuming the first form and nothing else is how a sheet goes missing: the lookup against
+/// `[Content_Types].xml` fails, `detect_worksheets` returns nothing, and the workbook opens
+/// with no sheets at all. No error, no warning -- an empty workbook.
+pub fn resolve_part(base_dir: &str, target: &str) -> String {
+    // A leading slash makes the target absolute from the package root, so `base_dir` no longer
+    // applies; an empty `base_dir` leaves nothing to prepend. Both mean "use the target alone".
+    // Splitting on '/' and dropping empty segments below then handles the leading slash, any
+    // `//`, and any `.` along the way.
+    let joined = if target.starts_with('/') || base_dir.is_empty() {
+        target.to_string()
+    } else {
+        format!("{base_dir}/{target}")
+    };
+
+    // Resolve `.` and `..` segment by segment. Doing this with string surgery rather than a
+    // canonicalise crate keeps the dependency list short and the failure mode obvious: a `..`
+    // that escapes the root is dropped, matching how a zip reader treats such a path.
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in joined.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
 }
 
 /// Resolve the worksheet parts by cross-referencing relationships and content types.
@@ -187,8 +233,8 @@ pub fn detect_worksheets(
     ids.sort_unstable();
     let mut out = Vec::new();
     for r_id in ids {
-        let path = &rels[&r_id];
-        let full_path = format!("xl/{path}");
+        let target = &rels[&r_id];
+        let full_path = resolve_part(WORKBOOK_PART_DIR, target);
         let Some((_, content_type)) = content_types
             .iter()
             .find(|(part, _)| part.trim_start_matches('/') == full_path)
@@ -200,7 +246,9 @@ pub fn detect_worksheets(
         }
         out.push(DetectedSheet {
             title: titles.get(&r_id).cloned().unwrap_or_default(),
-            path: path.clone(),
+            // The resolved path, not the raw target: the caller looks the part up in the zip,
+            // and the zip is keyed by the resolved name.
+            path: full_path,
         });
     }
     out
@@ -261,4 +309,135 @@ pub fn title_resolver(titles: &[String]) -> impl Fn(&str) -> Option<usize> + '_ 
 /// Helper used by [`read_properties_core`] for callers with an already-parsed tree.
 pub fn properties_from_element(root: &Element) -> Result<DocumentProperties> {
     read_properties_core(&crate::xml::functions::serialize(root))
+}
+
+#[cfg(test)]
+mod target_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn content_types() -> Vec<ContentTypeEntry> {
+        vec![
+            ("/xl/workbook.xml".to_string(), "workbook".to_string()),
+            (
+                "/xl/worksheets/sheet1.xml".to_string(),
+                VALID_WORKSHEET.to_string(),
+            ),
+            (
+                "/xl/worksheets/sheet2.xml".to_string(),
+                VALID_WORKSHEET.to_string(),
+            ),
+        ]
+    }
+
+    fn rels(targets: &[&str]) -> HashMap<usize, String> {
+        targets
+            .iter()
+            .enumerate()
+            .map(|(index, target)| (index + 1, target.to_string()))
+            .collect()
+    }
+
+    fn titles() -> Vec<(String, usize)> {
+        vec![("One".to_string(), 1), ("Two".to_string(), 2)]
+    }
+
+    #[test]
+    fn every_spelling_of_the_same_part_resolves_to_one_name() {
+        // The whole point: a generator that writes any of these must still be detected, or the
+        // workbook opens with no sheets and nothing says why.
+        let spellings = [
+            "worksheets/sheet1.xml",
+            "/xl/worksheets/sheet1.xml",
+            "../xl/worksheets/sheet1.xml",
+            "/xl/./worksheets/../worksheets/sheet1.xml",
+            "./worksheets/sheet1.xml",
+            "worksheets//sheet1.xml",
+        ];
+        for spelling in spellings {
+            assert_eq!(
+                resolve_part(WORKBOOK_PART_DIR, spelling),
+                "xl/worksheets/sheet1.xml",
+                "{spelling}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absolute_target_does_not_become_a_double_prefix() {
+        let found = detect_worksheets(
+            &content_types(),
+            &rels(&["/xl/worksheets/sheet1.xml", "/xl/worksheets/sheet2.xml"]),
+            &titles(),
+        );
+        assert_eq!(found.len(), 2, "both absolute targets were found");
+        assert_eq!(found[0].path, "xl/worksheets/sheet1.xml");
+        assert_eq!(found[0].title, "One");
+        assert_eq!(found[1].path, "xl/worksheets/sheet2.xml");
+        assert_eq!(found[1].title, "Two");
+    }
+
+    #[test]
+    fn the_usual_relative_form_still_works() {
+        let found = detect_worksheets(
+            &content_types(),
+            &rels(&["worksheets/sheet1.xml", "worksheets/sheet2.xml"]),
+            &titles(),
+        );
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].path, "xl/worksheets/sheet1.xml");
+    }
+
+    #[test]
+    fn a_target_that_climbs_out_of_xl_lands_at_the_package_root() {
+        // `../customXml/item1.xml` from `xl/` is `customXml/item1.xml`, not `xl/../customXml/...`
+        // and certainly not `xl/customXml/...`.
+        assert_eq!(
+            resolve_part(WORKBOOK_PART_DIR, "../customXml/item1.xml"),
+            "customXml/item1.xml"
+        );
+    }
+
+    #[test]
+    fn a_target_escaping_the_package_root_loses_the_escape_rather_than_the_path() {
+        // A `..` past the root is meaningless. Dropping it keeps the part findable, which beats
+        // rejecting the file outright for a path no writer should have produced.
+        assert_eq!(
+            resolve_part(WORKBOOK_PART_DIR, "../../xl/worksheets/sheet1.xml"),
+            "xl/worksheets/sheet1.xml"
+        );
+    }
+
+    #[test]
+    fn a_target_with_no_extension_such_as_a_directory_still_resolves() {
+        assert_eq!(resolve_part(WORKBOOK_PART_DIR, "../docProps"), "docProps");
+    }
+
+    #[test]
+    fn a_non_worksheet_relationship_is_still_excluded() {
+        let types = vec![
+            (
+                "/xl/worksheets/sheet1.xml".to_string(),
+                VALID_WORKSHEET.to_string(),
+            ),
+            ("/xl/styles.xml".to_string(), "styles".to_string()),
+        ];
+        let found = detect_worksheets(
+            &types,
+            &rels(&["worksheets/sheet1.xml", "styles.xml"]),
+            &titles(),
+        );
+        assert_eq!(found.len(), 1, "styles.xml is not a sheet");
+        assert_eq!(found[0].title, "One");
+    }
+
+    #[test]
+    fn a_target_naming_no_part_at_all_is_skipped_rather_than_failing() {
+        let found = detect_worksheets(
+            &content_types(),
+            &rels(&["worksheets/missing.xml"]),
+            &titles(),
+        );
+        assert!(found.is_empty());
+    }
 }
