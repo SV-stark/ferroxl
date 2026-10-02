@@ -167,6 +167,15 @@ fn default_font_xml() -> String {
     font.to_pretty_string()
 }
 
+/// A boolean as OOXML writes it: `1` and `0`, not `true` and `false`.
+fn flag(value: bool) -> String {
+    if value {
+        "1".to_string()
+    } else {
+        "0".to_string()
+    }
+}
+
 fn font_xml(font: &Font) -> String {
     let mut node = Element::new("font");
     node.append(Element::with_attributes(
@@ -175,15 +184,71 @@ fn font_xml(font: &Font) -> String {
     ));
     unpack_color(&mut node, "color", &font.color.index);
     node.append(Element::with_attributes("name", [("val", &font.name)]));
-    node.append(Element::with_attributes("family", [("val", "2")]));
+    // `family` was hard-coded to 2, which is what Excel's default font carries. A file using
+    // any other family index loaded with the wrong one and saved it back, so the distinction
+    // between "not set" and "set to 2" had to be kept.
+    let family = if font.family < 0 {
+        "2".to_string()
+    } else {
+        font.family.to_string()
+    };
+    node.append(Element::with_attributes(
+        "family",
+        [("val", family.as_str())],
+    ));
     if font.bold {
         node.append(Element::new("b"));
     }
     if font.italic {
         node.append(Element::new("i"));
     }
-    if font.underline == Font::UNDERLINE_SINGLE {
-        node.append(Element::new("u"));
+    if font.strikethrough {
+        node.append(Element::new("strike"));
+    }
+    // Every underline style, not just `single`: `doubleAccounting` is what Excel writes for a
+    // double underline in an accounting format, and it was being dropped to a bare `<u/>`.
+    if !font.underline.is_empty() && font.underline != Font::UNDERLINE_NONE {
+        node.append(Element::with_attributes("u", [("val", &font.underline)]));
+    }
+    if let Some(outline) = font.outline {
+        node.append(Element::with_attributes(
+            "outline",
+            [("val", &flag(outline))],
+        ));
+    }
+    if let Some(shadow) = font.shadow {
+        node.append(Element::with_attributes("shadow", [("val", &flag(shadow))]));
+    }
+    if let Some(condense) = font.condense {
+        node.append(Element::with_attributes(
+            "condense",
+            [("val", &flag(condense))],
+        ));
+    }
+    if let Some(extend) = font.extend {
+        node.append(Element::with_attributes("extend", [("val", &flag(extend))]));
+    }
+    if font.charset >= 0 {
+        node.append(Element::with_attributes(
+            "charset",
+            [("val", &font.charset.to_string())],
+        ));
+    }
+    // A themed font names the theme slot rather than a typeface. Writing `name` as well would
+    // be harmless, but omitting `scheme` would pin the font to that name and defeat the theme.
+    if !font.scheme.is_empty() {
+        node.append(Element::with_attributes("scheme", [("val", &font.scheme)]));
+    }
+    if font.superscript {
+        node.append(Element::with_attributes(
+            "vertAlign",
+            [("val", "superscript")],
+        ));
+    } else if font.subscript {
+        node.append(Element::with_attributes(
+            "vertAlign",
+            [("val", "subscript")],
+        ));
     }
     node.to_pretty_string()
 }
@@ -211,6 +276,35 @@ fn fill_table(tables: &StyleTables) -> (Vec<String>, HashMap<Fill, usize>) {
     (xml, indices)
 }
 
+/// A `<gradientFill>` element.
+///
+/// `degree` is only meaningful for a linear gradient; a path gradient uses the direction
+/// attributes instead, and Excel ignores `degree` on one. The stops go inside in position
+/// order, which is the order they were created in.
+fn gradient_xml(fill: &Fill) -> Element {
+    let gradient_type = fill
+        .fill_type
+        .clone()
+        .unwrap_or_else(|| Fill::FILL_GRADIENT_LINEAR.to_string());
+    let mut attributes: Vec<(&str, String)> = vec![("type", gradient_type.clone())];
+    if gradient_type == Fill::FILL_GRADIENT_LINEAR && fill.rotation != 0 {
+        attributes.push(("degree", fill.rotation.to_string()));
+    }
+    let mut node = Element::with_attributes("gradientFill", attributes);
+    for stop in &fill.stops {
+        let mut child = Element::with_attributes(
+            "stop",
+            [(
+                "position",
+                crate::xml::functions::safe_string(stop.position),
+            )],
+        );
+        unpack_color(&mut child, "color", &stop.color.index);
+        node.append(child);
+    }
+    node
+}
+
 fn plain_fill_xml(pattern: &str) -> String {
     let mut fill = Element::new("fill");
     fill.append(Element::with_attributes(
@@ -222,6 +316,10 @@ fn plain_fill_xml(pattern: &str) -> String {
 
 fn fill_xml(fill: &Fill, default: &Fill) -> String {
     let mut node = Element::new("fill");
+    if fill.is_gradient() {
+        node.append(gradient_xml(fill));
+        return node.to_pretty_string();
+    }
     if fill.fill_type.as_deref() == default.fill_type.as_deref() {
         return node.to_pretty_string();
     }
@@ -802,5 +900,44 @@ mod tests {
         let alignment = Alignment::new().with_text_rotation(-45);
         let attrs = alignment_attributes(&alignment);
         assert!(attrs.iter().any(|(k, v)| k == "textRotation" && v == "135"));
+    }
+
+    #[test]
+    fn a_gradient_fill_survives_a_package_round_trip() {
+        // This is the test the missing gradient branch failed: a workbook using one loaded
+        // with every cell falling back to a plain fill, silently, and it looked correct
+        // because a missing gradient is just a background colour.
+        use crate::cell::cell::CellValue;
+        use crate::styles::colors::Color;
+        use crate::styles::fills::Fill;
+        use crate::workbook::Workbook;
+
+        let gradient = Fill::linear_gradient(&[Color::new("FF102030"), Color::new("FFA0B0C0")]);
+        let mut workbook = Workbook::new();
+        let sheet = workbook.active_sheet_mut().expect("sheet");
+        sheet.set("A1", CellValue::text("x")).expect("cell");
+        sheet
+            .set_style(
+                "A1",
+                crate::styles::style::Style {
+                    fill: gradient.clone(),
+                    ..crate::styles::style::Style::default()
+                },
+            )
+            .expect("styled");
+        let bytes = workbook.to_bytes().expect("saved");
+
+        let loaded = crate::reader::excel::load_workbook_from_bytes(bytes, Default::default())
+            .expect("loaded");
+        let style = loaded.worksheets[0].get_style("A1");
+
+        assert!(style.fill.is_gradient(), "the fill became {:?}", style.fill);
+        assert_eq!(
+            style.fill.fill_type.as_deref(),
+            Some(Fill::FILL_GRADIENT_LINEAR)
+        );
+        assert_eq!(style.fill.stops.len(), 2);
+        assert_eq!(style.fill.stops[0].color.index, "FF102030");
+        assert_eq!(style.fill.stops[1].color.index, "FFA0B0C0");
     }
 }

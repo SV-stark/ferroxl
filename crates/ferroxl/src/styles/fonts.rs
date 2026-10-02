@@ -31,6 +31,27 @@ pub struct Font {
     pub strikethrough: bool,
     /// Font colour.
     pub color: Color,
+    /// The character set, e.g. 1 for a system font. `-1` when unset.
+    ///
+    /// Read and written rather than dropped: a file using a symbol or far-east font keeps
+    /// its appearance on load and loses it on save otherwise.
+    pub charset: i64,
+    /// The font family index, 0 to 14. `-1` when unset.
+    pub family: i64,
+    /// The theme font reference, e.g. `major` or `minor`. Empty when unset.
+    ///
+    /// A themed font follows the document's theme rather than naming a typeface, so a theme
+    /// change is supposed to restyle the whole workbook. Dropping it turns a themed font into
+    /// whatever the name said, which defeats the point of theming.
+    pub scheme: String,
+    /// Render as outline text.
+    pub outline: Option<bool>,
+    /// Render with a shadow.
+    pub shadow: Option<bool>,
+    /// Condense the character spacing.
+    pub condense: Option<bool>,
+    /// Extend the character spacing.
+    pub extend: Option<bool>,
 }
 
 impl PartialEq for Font {
@@ -75,6 +96,13 @@ impl Default for Font {
             underline: Font::UNDERLINE_NONE.to_string(),
             strikethrough: false,
             color: Color::new(Color::BLACK),
+            charset: -1,
+            family: -1,
+            scheme: String::new(),
+            outline: None,
+            shadow: None,
+            condense: None,
+            extend: None,
         }
     }
 }
@@ -127,6 +155,49 @@ impl Font {
     }
 
     /// Chainable colour setter.
+    /// Set the character set index.
+    pub fn with_charset(mut self, charset: i64) -> Self {
+        self.charset = charset;
+        self
+    }
+
+    /// Set the font family index, 0 to 14.
+    pub fn with_family(mut self, family: i64) -> Self {
+        self.family = family;
+        self
+    }
+
+    /// Set the theme font reference, `major` or `minor`.
+    pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = scheme.into();
+        self
+    }
+
+    /// Render as outline text.
+    pub fn with_outline(mut self, outline: bool) -> Self {
+        self.outline = Some(outline);
+        self
+    }
+
+    /// Render with a shadow.
+    pub fn with_shadow(mut self, shadow: bool) -> Self {
+        self.shadow = Some(shadow);
+        self
+    }
+
+    /// Condense the character spacing.
+    pub fn with_condense(mut self, condense: bool) -> Self {
+        self.condense = Some(condense);
+        self
+    }
+
+    /// Extend the character spacing.
+    pub fn with_extend(mut self, extend: bool) -> Self {
+        self.extend = Some(extend);
+        self
+    }
+
+    /// Set the text colour.
     pub fn with_color(mut self, color: Color) -> Self {
         self.color = color;
         self

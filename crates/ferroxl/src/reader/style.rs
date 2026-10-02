@@ -11,7 +11,7 @@ use crate::formatting::DxfStyle;
 use crate::styles::alignment::Alignment;
 use crate::styles::borders::{Border, Borders};
 use crate::styles::colors::{Color, COLOR_INDEX};
-use crate::styles::fills::Fill;
+use crate::styles::fills::{Fill, GradientStop};
 use crate::styles::fonts::Font;
 use crate::styles::numbers::NumberFormat;
 use crate::styles::protection::{Protection, ProtectionFlag};
@@ -161,6 +161,41 @@ impl StyleTableParser {
         if node.find(self.tag("strike")).is_some() {
             font.strikethrough = true;
         }
+        // The remaining font attributes were read as nothing at all, so a themed font loaded
+        // as its resolved name and was written back without the theme -- pinning it, which is
+        // the opposite of what a theme is for.
+        let integer = |name: &str| {
+            node.find(self.tag(name))
+                .and_then(|n| n.get("val"))
+                .and_then(|v| v.trim().parse::<i64>().ok())
+        };
+        if let Some(charset) = integer("charset") {
+            font.charset = charset;
+        }
+        if let Some(family) = integer("family") {
+            font.family = family;
+        }
+        if let Some(scheme) = node.find(self.tag("scheme")).and_then(|n| n.get("val")) {
+            font.scheme = scheme.to_string();
+        }
+        let toggle = |name: &str| {
+            node.find(self.tag(name))
+                .map(|n| !matches!(n.get("val"), Some("0") | Some("false")))
+        };
+        font.outline = toggle("outline");
+        font.shadow = toggle("shadow");
+        font.condense = toggle("condense");
+        font.extend = toggle("extend");
+        if let Some(vert) = node.find(self.tag("vertAlign")).and_then(|n| n.get("val")) {
+            match vert {
+                "superscript" => font.superscript = true,
+                "subscript" => font.subscript = true,
+                _ => {}
+            }
+        }
+        if node.find(self.tag("strike")).is_some() {
+            font.strikethrough = true;
+        }
         if let Some(color) = node.find(self.tag("color")) {
             if let Some(value) = self.relevant_color(color) {
                 font.color = Color::new(value);
@@ -180,7 +215,48 @@ impl StyleTableParser {
             .collect()
     }
 
+    /// Parse a `<fill>`, which is either a pattern or a gradient.
+    ///
+    /// The gradient branch was missing, so a workbook using one loaded with every cell
+    /// falling back to a plain fill: silent, and it looked correct because a missing gradient
+    /// is just a background colour.
+    /// Parse a `<gradientFill>` into a [`Fill`].
+    ///
+    /// The element carries both `type` and a set of `degree`/direction attributes, and the
+    /// `<stop>` children are the colours. A gradient with no stops is kept as a gradient with
+    /// none rather than being dropped: Excel writes that for a single-colour gradient, and
+    /// discarding it would turn a styled cell into an unstyled one.
+    fn parse_gradient_fill(&self, node: &Element) -> Fill {
+        let mut fill = Fill::new();
+        fill.fill_type = Some(
+            node.get("type")
+                .unwrap_or(Fill::FILL_GRADIENT_LINEAR)
+                .to_string(),
+        );
+        let number = |name: &str| node.get(name).and_then(|v| v.parse::<f64>().ok());
+        fill.rotation = number("degree").unwrap_or(0.0) as i64;
+
+        for stop in node.find_all(self.tag("stop")) {
+            let position = stop
+                .get("position")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            // A stop's colour is an `<color>` child whose *name* selects the attribute: a
+            // stop can carry rgb, theme or indexed and the reader has to look at all three.
+            let color = stop
+                .find(self.tag("color"))
+                .and_then(|c| self.relevant_color(c))
+                .unwrap_or(Color::WHITE.to_string());
+            fill.stops
+                .push(GradientStop::new(position, Color::new(color)));
+        }
+        fill
+    }
+
     fn parse_fill(&self, node: &Element) -> Option<Fill> {
+        if let Some(gradient) = node.find(self.tag("gradientFill")) {
+            return Some(self.parse_gradient_fill(gradient));
+        }
         let pattern = node.find(self.tag("patternFill"))?;
         let mut fill = Fill::new();
         fill.fill_type = pattern.get("patternType").map(|v| v.to_string());
@@ -321,6 +397,24 @@ impl StyleTableParser {
                         .and_then(|v| v.trim().parse::<i64>().ok())
                     {
                         style.alignment.text_rotation = rotation;
+                    }
+                    // `relativeIndent` was read as absent, which turned a hanging indent into
+                    // a plain one -- still an indent, so nothing looked wrong.
+                    if let Some(relative) = alignment
+                        .get("relativeIndent")
+                        .and_then(|v| v.trim().parse::<i32>().ok())
+                    {
+                        style.alignment.relative_indent = relative;
+                    }
+                    if alignment.get("justifyLastLine").is_some() {
+                        style.alignment.justify_last_line =
+                            Some(xml_truthy(alignment.get("justifyLastLine")));
+                    }
+                    if let Some(order) = alignment
+                        .get("readingOrder")
+                        .and_then(|v| v.trim().parse::<u32>().ok())
+                    {
+                        style.alignment.reading_order = order;
                     }
                 }
             }

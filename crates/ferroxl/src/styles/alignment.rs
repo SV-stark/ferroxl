@@ -15,6 +15,16 @@ pub struct Alignment {
     pub shrink_to_fit: bool,
     /// Indent level.
     pub indent: i64,
+    /// The indent relative to the layout's base indent, -255 to 255.
+    ///
+    /// A separate mechanism from `indent`: this one scales with the layout, which is what
+    /// makes a hanging indent work inside a merged block or a table. Reading it as absent
+    /// turned a hanging indent into a plain one, which still looks like an indent.
+    pub relative_indent: i32,
+    /// Justify the last line as well, under a distributed alignment.
+    pub justify_last_line: Option<bool>,
+    /// The reading order for right-to-left text: 0 context-dependent, 1 left-to-right.
+    pub reading_order: u32,
 }
 
 impl Default for Alignment {
@@ -26,6 +36,9 @@ impl Default for Alignment {
             wrap_text: false,
             shrink_to_fit: false,
             indent: 0,
+            relative_indent: 0,
+            justify_last_line: None,
+            reading_order: 0,
         }
     }
 }
@@ -88,6 +101,25 @@ impl Alignment {
     }
 
     /// Chainable indent setter.
+    /// Set the relative indent, -255 to 255.
+    pub fn with_relative_indent(mut self, value: i32) -> Self {
+        self.relative_indent = value.clamp(-255, 255);
+        self
+    }
+
+    /// Justify the last line as well.
+    pub fn with_justify_last_line(mut self, justify: bool) -> Self {
+        self.justify_last_line = Some(justify);
+        self
+    }
+
+    /// Set the reading order for right-to-left text.
+    pub fn with_reading_order(mut self, order: u32) -> Self {
+        self.reading_order = order;
+        self
+    }
+
+    /// Set the indent level.
     pub fn with_indent(mut self, value: i64) -> Self {
         self.indent = value;
         self
@@ -118,6 +150,22 @@ impl Alignment {
         }
         if self.indent > 0 {
             attrs.push(("indent".to_string(), self.indent.to_string()));
+        }
+        if self.relative_indent != 0 {
+            attrs.push((
+                "relativeIndent".to_string(),
+                self.relative_indent.to_string(),
+            ));
+        }
+        if let Some(justify) = self.justify_last_line {
+            attrs.push(("justifyLastLine".to_string(), "1".to_string()));
+            if !justify {
+                let last = attrs.len() - 1;
+                attrs[last].1 = "0".to_string();
+            }
+        }
+        if self.reading_order != 0 {
+            attrs.push(("readingOrder".to_string(), self.reading_order.to_string()));
         }
         if self.text_rotation > 0 {
             attrs.push(("textRotation".to_string(), self.text_rotation.to_string()));
