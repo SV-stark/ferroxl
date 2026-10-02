@@ -78,6 +78,7 @@ pub mod date_time;
 pub mod drawing;
 pub mod exceptions;
 pub mod formatting;
+pub mod formula;
 pub mod namedrange;
 pub mod reader;
 pub mod styles;
