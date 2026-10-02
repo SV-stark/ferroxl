@@ -45,6 +45,8 @@ pub struct Chart {
     pub base_margin_left: f64,
     /// Shapes drawn inside the chart.
     pub shapes: Vec<Shape>,
+    /// Options that only some chart types have.
+    pub options: ChartOptions,
 }
 
 impl Default for Chart {
@@ -77,6 +79,7 @@ impl Default for Chart {
             base_margin_top: 1.0,
             base_margin_left: 0.0,
             shapes: Vec::new(),
+            options: ChartOptions::default(),
         }
     }
 }
@@ -377,6 +380,408 @@ impl ScatterChart {
 impl Default for ScatterChart {
     fn default() -> Self {
         ScatterChart::new()
+    }
+}
+
+/// How a 3-D chart is oriented.
+///
+/// Only meaningful for the 3-D chart types. A 2-D chart that carries one is written with
+/// it ignored rather than refused, because the field has nowhere to go and silently
+/// dropping it would be harder to notice than ignoring it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View3D {
+    /// Rotation about the x axis, in degrees. openpyxl allows -90 to 90.
+    pub rot_x: i64,
+    /// Rotation about the y axis, in degrees. openpyxl allows -90 to 90.
+    pub rot_y: i64,
+    /// Depth of the plot as a percentage of its width.
+    pub depth_percent: i64,
+    /// Whether the axes are drawn at right angles.
+    pub right_angle_axes: bool,
+}
+
+impl View3D {
+    /// A view with Excel's own defaults: no rotation, full depth, square axes.
+    pub fn new() -> Self {
+        View3D {
+            rot_x: 15,
+            rot_y: 20,
+            depth_percent: 100,
+            right_angle_axes: false,
+        }
+    }
+
+    /// Set the x-axis rotation.
+    pub fn with_rot_x(mut self, degrees: i64) -> Self {
+        self.rot_x = degrees.clamp(-90, 90);
+        self
+    }
+
+    /// Set the y-axis rotation.
+    pub fn with_rot_y(mut self, degrees: i64) -> Self {
+        self.rot_y = degrees.clamp(-90, 90);
+        self
+    }
+
+    /// Set the plot depth as a percentage.
+    pub fn with_depth_percent(mut self, percent: i64) -> Self {
+        self.depth_percent = percent.clamp(1, 200);
+        self
+    }
+
+    /// Draw the axes at right angles.
+    pub fn with_right_angle_axes(mut self) -> Self {
+        self.right_angle_axes = true;
+        self
+    }
+}
+
+impl Default for View3D {
+    fn default() -> Self {
+        View3D::new()
+    }
+}
+
+/// Options that only some chart types have.
+///
+/// One field per option rather than a `HashMap`, because each is meaningful to a fixed set
+/// of chart types and a missing one is a bug the writer can see. A map would make
+/// `holeSize` on a bar chart a runtime surprise instead of a compile-time one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartOptions {
+    /// `radarStyle`: `standard`, `marker` or `filled`.
+    pub radar_style: &'static str,
+    /// `holeSize` as a percentage, 1 to 90. `None` leaves it to Excel's default.
+    pub hole_size: Option<u16>,
+    /// `firstSliceAng`, 0 to 360.
+    pub first_slice_angle: Option<u16>,
+    /// `bubble3D`.
+    pub bubble_3d: bool,
+    /// `bubbleScale`, 0 to 300.
+    pub bubble_scale: Option<u16>,
+    /// `showNegBubbles`.
+    pub show_negative_bubbles: bool,
+    /// `sizeRepresents`: `area` or `w`.
+    pub size_represents: &'static str,
+    /// `wireframe`, for surface charts.
+    pub wireframe: bool,
+    /// `ofPieType`: `pie` or `bar`, for a projected pie.
+    pub of_pie_type: &'static str,
+    /// The 3-D view, if this is a 3-D chart.
+    pub view_3d: Option<View3D>,
+}
+
+impl Default for ChartOptions {
+    fn default() -> Self {
+        ChartOptions {
+            radar_style: "standard",
+            hole_size: None,
+            first_slice_angle: None,
+            bubble_3d: false,
+            bubble_scale: None,
+            show_negative_bubbles: false,
+            size_represents: "area",
+            wireframe: false,
+            of_pie_type: "pie",
+            view_3d: None,
+        }
+    }
+}
+
+impl ChartOptions {
+    /// Set the radar style.
+    pub fn with_radar_style(mut self, style: &'static str) -> Self {
+        self.radar_style = style;
+        self
+    }
+
+    /// Set the doughnut hole size as a percentage.
+    pub fn with_hole_size(mut self, percent: u16) -> Self {
+        self.hole_size = Some(percent.clamp(1, 90));
+        self
+    }
+
+    /// Rotate the first slice, for pie and projected-pie charts.
+    pub fn with_first_slice_angle(mut self, degrees: u16) -> Self {
+        self.first_slice_angle = Some(degrees.min(360));
+        self
+    }
+
+    /// Render bubbles as 3-D spheres.
+    pub fn three_d_bubbles(mut self) -> Self {
+        self.bubble_3d = true;
+        self
+    }
+
+    /// Set the bubble scale, 0 to 300.
+    pub fn with_bubble_scale(mut self, percent: u16) -> Self {
+        self.bubble_scale = Some(percent.min(300));
+        self
+    }
+
+    /// Show bubbles for negative values.
+    pub fn with_negative_bubbles(mut self) -> Self {
+        self.show_negative_bubbles = true;
+        self
+    }
+
+    /// Whether bubble size represents `area` or `w` (width).
+    pub fn with_size_represents(mut self, kind: &'static str) -> Self {
+        self.size_represents = kind;
+        self
+    }
+
+    /// Draw surface charts as a wireframe.
+    pub fn wireframe(mut self) -> Self {
+        self.wireframe = true;
+        self
+    }
+
+    /// Whether a projected pie is drawn as `pie` or `bar`.
+    pub fn with_of_pie_type(mut self, kind: &'static str) -> Self {
+        self.of_pie_type = kind;
+        self
+    }
+
+    /// Set the 3-D view.
+    pub fn with_view_3d(mut self, view: View3D) -> Self {
+        self.view_3d = Some(view);
+        self
+    }
+}
+
+/// Declares a chart type that is a graph chart: it has axes, and it can carry a 3-D view.
+///
+/// A macro rather than nine near-identical `impl` blocks. The bodies are genuinely
+/// identical — build the inner `GraphChart`, add a series, recompute axes, carry the axes
+/// across — and the part that differs is the type name and the tag, which is what the macro
+/// is parameterised on. Spelling them out would be nine chances to mistype a tag.
+macro_rules! graph_chart_type {
+    ($(#[$meta:meta])* $name:ident, $tag:literal, $grouping:expr) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct $name(pub GraphChart);
+
+        impl $name {
+            /// A new chart of this type.
+            pub fn new() -> Self {
+                let mut chart = GraphChart::new($tag);
+                chart.base.grouping = $grouping;
+                $name(chart)
+            }
+
+            /// A new chart of this type with the given options.
+            pub fn with_options(options: ChartOptions) -> Self {
+                let mut chart = GraphChart::new($tag);
+                chart.base.grouping = $grouping;
+                chart.base.options = options;
+                $name(chart)
+            }
+
+            /// Add a series.
+            pub fn add_series(&mut self, series: Series) -> &mut Self {
+                self.0.add_series(series);
+                self
+            }
+
+            /// Recompute the axis bounds from the series data.
+            pub fn compute_axes(&mut self) {
+                self.0.compute_axes();
+            }
+
+            /// The options this chart was built with.
+            pub fn options(&self) -> &ChartOptions {
+                &self.0.base.options
+            }
+
+            /// Replace the options.
+            pub fn set_options(&mut self, options: ChartOptions) -> &mut Self {
+                self.0.base.options = options;
+                self
+            }
+
+            /// The underlying chart, carrying its axes for storage on a worksheet.
+            pub fn into_chart(self) -> Chart {
+                let mut base = self.0.base;
+                base.axes = Some((self.0.x_axis, self.0.y_axis));
+                base
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                $name::new()
+            }
+        }
+    };
+}
+
+/// Declares a chart type that has no axes.
+macro_rules! axeless_chart_type {
+    ($(#[$meta:meta])* $name:ident, $tag:literal) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq)]
+        pub struct $name(pub Chart);
+
+        impl $name {
+            /// A new chart of this type.
+            pub fn new() -> Self {
+                $name(Chart {
+                    chart_type: $tag,
+                    ..Chart::default()
+                })
+            }
+
+            /// A new chart of this type with the given options.
+            pub fn with_options(options: ChartOptions) -> Self {
+                let mut chart = Chart {
+                    chart_type: $tag,
+                    ..Chart::default()
+                };
+                chart.options = options;
+                $name(chart)
+            }
+
+            /// Add a series.
+            pub fn add_series(&mut self, series: Series) -> &mut Self {
+                self.0.add_series(series);
+                self
+            }
+
+            /// The options this chart was built with.
+            pub fn options(&self) -> &ChartOptions {
+                &self.0.options
+            }
+
+            /// Replace the options.
+            pub fn set_options(&mut self, options: ChartOptions) -> &mut Self {
+                self.0.options = options;
+                self
+            }
+
+            /// The underlying chart.
+            pub fn into_chart(self) -> Chart {
+                self.0
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                $name::new()
+            }
+        }
+    };
+}
+
+graph_chart_type!(
+    /// A clustered area chart.
+    AreaChart,
+    "areaChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A 3-D area chart.
+    AreaChart3D,
+    "area3DChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A 3-D bar chart.
+    BarChart3D,
+    "bar3DChart",
+    "clustered"
+);
+graph_chart_type!(
+    /// A 3-D line chart.
+    LineChart3D,
+    "line3DChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A radar chart. `radar_style` chooses between `standard`, `marker` and `filled`.
+    RadarChart,
+    "radarChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A bubble chart. Each series needs x values, y values and a bubble size.
+    BubbleChart,
+    "bubbleChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A stock chart: three or four series of open/high/low/close.
+    ///
+    /// A stock chart has no marker by default, which is why openpyxl sets the series marker
+    /// to `none` unless told otherwise; a marker on a price series obscures the line.
+    StockChart,
+    "stockChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A 3-D surface chart.
+    SurfaceChart3D,
+    "surface3DChart",
+    "standard"
+);
+graph_chart_type!(
+    /// A wireframe surface chart.
+    SurfaceChart,
+    "surfaceChart",
+    "standard"
+);
+
+axeless_chart_type!(
+    /// A 3-D pie chart.
+    PieChart3D,
+    "pie3DChart"
+);
+axeless_chart_type!(
+    /// A doughnut chart: a pie with a hole in the middle.
+    ///
+    /// `hole_size` is the hole's diameter as a percentage of the whole. Excel's default is
+    /// 10, and openpyxl's is 10 as well.
+    DoughnutChart,
+    "doughnutChart"
+);
+axeless_chart_type!(
+    /// A projected pie: a pie plus a bar chart of the same data. `of_pie_type` chooses
+    /// which of the two is the bar.
+    ProjectedPieChart,
+    "ofPieChart"
+);
+
+impl BarChart {
+    /// A clustered bar chart with the given options.
+    ///
+    /// Present so every chart type takes options the same way. The 3-D and area variants
+    /// have it from the macro that declares them; these predate it.
+    pub fn with_options(options: ChartOptions) -> Self {
+        let mut chart = GraphChart::new("barChart");
+        chart.base.grouping = "clustered";
+        chart.base.options = options;
+        BarChart(chart)
+    }
+}
+
+impl LineChart {
+    /// A line chart with the given options.
+    pub fn with_options(options: ChartOptions) -> Self {
+        let mut chart = GraphChart::new("lineChart");
+        chart.base.options = options;
+        LineChart(chart)
+    }
+}
+
+impl ScatterChart {
+    /// A scatter chart with the given options.
+    pub fn with_options(options: ChartOptions) -> Self {
+        let mut chart = GraphChart::new("scatterChart");
+        chart.x_axis.axis_type = "valAx".to_string();
+        chart.x_axis.cross_between = "midCat".to_string();
+        chart.y_axis.cross_between = "midCat".to_string();
+        chart.base.options = options;
+        ScatterChart(chart)
     }
 }
 

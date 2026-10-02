@@ -11,6 +11,8 @@ pub enum SeriesAttr {
     Values,
     /// The x values.
     XValues,
+    /// The bubble sizes.
+    BubbleSizes,
 }
 
 /// A series of data and possibly associated labels.
@@ -22,6 +24,11 @@ pub struct Series {
     pub x_reference: Option<Reference>,
     /// The reference holding the category labels.
     pub labels: Option<Reference>,
+    /// The reference holding the bubble sizes, for a bubble chart.
+    ///
+    /// openpyxl calls this `zVal` on the series it builds from `SeriesFactory` and
+    /// `bubbleSize` on the element; both names for the same third column of numbers.
+    pub bubble_size: Option<Reference>,
     /// The series title.
     pub title: Option<String>,
     /// Marker style; [`Series::MARKER_NONE`] by default.
@@ -38,6 +45,7 @@ impl Default for Series {
             reference: None,
             x_reference: None,
             labels: None,
+            bubble_size: None,
             title: None,
             marker: Series::MARKER_NONE.to_string(),
             color: None,
@@ -76,6 +84,12 @@ impl Series {
         self
     }
 
+    /// Set the bubble sizes, for a bubble chart.
+    pub fn with_bubble_size(mut self, reference: Reference) -> Self {
+        self.bubble_size = Some(reference);
+        self
+    }
+
     /// Set the series colour; the alpha prefix is stripped.
     pub fn with_color(mut self, color: &str) -> Self {
         self.color = Some(short_color(color));
@@ -98,6 +112,7 @@ impl Series {
         let reference = match attr {
             SeriesAttr::Values => self.reference.as_ref(),
             SeriesAttr::XValues => self.x_reference.as_ref(),
+            SeriesAttr::BubbleSizes => self.bubble_size.as_ref(),
         };
         reference.and_then(|r| r.values()).unwrap_or(&[])
     }

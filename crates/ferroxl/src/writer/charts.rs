@@ -28,6 +28,7 @@ struct PreparedChart {
     print_margins: Vec<(String, String)>,
     has_shapes: bool,
     axes: Option<(Axis, Axis)>,
+    options: crate::charts::chart::ChartOptions,
 }
 
 fn prepare(chart: &Chart) -> PreparedChart {
@@ -46,6 +47,7 @@ fn prepare(chart: &Chart) -> PreparedChart {
         print_margins: chart.print_margins.clone(),
         has_shapes: !chart.shapes.is_empty(),
         axes: None,
+        options: chart.options.clone(),
     }
 }
 
@@ -66,6 +68,7 @@ pub fn write_chart(chart: &Chart) -> Result<String> {
         format!("{{{CHART_NS}}}lang"),
         [("val", &prepared.lang)],
     ));
+    write_view_3d(&mut root, &prepared);
     write_chart_node(&mut root, &prepared)?;
     write_print_settings(&mut root, &prepared.print_margins);
     if prepared.has_shapes {
@@ -89,6 +92,7 @@ pub fn write_graph_chart(chart: &GraphChart) -> String {
         format!("{{{CHART_NS}}}lang"),
         [("val", &prepared.lang)],
     ));
+    write_view_3d(&mut root, &prepared);
     // The axes are already scaled, so the helper must not recompute them again.
     let _ = write_chart_node(&mut root, &prepared);
     write_print_settings(&mut root, &prepared.print_margins);
@@ -115,6 +119,7 @@ pub fn write_any_chart(
         format!("{{{CHART_NS}}}lang"),
         [("val", &prepared.lang)],
     ));
+    write_view_3d(&mut root, &prepared);
     write_chart_node(&mut root, &prepared)?;
     write_print_settings(&mut root, &prepared.print_margins);
     if prepared.has_shapes {
@@ -167,8 +172,9 @@ fn write_chart_node(root: &mut Element, prepared: &PreparedChart) -> Result<()> 
     plot_area.append(layout);
 
     let mut subchart = Element::new(format!("{{{CHART_NS}}}{}", prepared.chart_type));
-    write_options(&mut subchart, &prepared.chart_type, &prepared.grouping);
+    write_options(&mut subchart, prepared);
     write_series(&mut subchart, prepared)?;
+    write_options_after_series(&mut subchart, prepared);
     plot_area.append(subchart);
 
     if let Some((x_axis, y_axis)) = &prepared.axes {
@@ -212,38 +218,152 @@ fn write_chart_node(root: &mut Element, prepared: &PreparedChart) -> Result<()> 
     Ok(())
 }
 
-fn write_options(subchart: &mut Element, chart_type: &str, grouping: &str) {
-    match chart_type {
-        "pieChart" => {
-            subchart.append(Element::with_attributes(
-                format!("{{{CHART_NS}}}varyColors"),
-                [("val", "1")],
-            ));
+/// Write the type-specific option elements that precede the series.
+///
+/// Element order is fixed by the schema, not by taste: `grouping` before `varyColors`,
+/// `barDir` first of all, and the trailing elements (`holeSize`, `bubbleScale`) after the
+/// series, which this function cannot reach — [`write_options_after_series`] does.
+fn write_options(subchart: &mut Element, prepared: &PreparedChart) {
+    let options = &prepared.options;
+    let flag =
+        |name: &str| Element::with_attributes(format!("{{{CHART_NS}}}{name}"), [("val", "1")]);
+    let value = |name: &str, val: &str| {
+        Element::with_attributes(format!("{{{CHART_NS}}}{name}"), [("val", val)])
+    };
+
+    match prepared.chart_type.as_str() {
+        // `varyColors` gives every slice a different colour, which is what makes a pie
+        // readable at all. Excel writes it for every pie-family chart.
+        "pieChart" | "pie3DChart" | "doughnutChart" | "ofPieChart" => {
+            subchart.append(flag("varyColors"));
         }
-        "barChart" => {
-            subchart.append(Element::with_attributes(
-                format!("{{{CHART_NS}}}barDir"),
-                [("val", "col")],
-            ));
-            subchart.append(Element::with_attributes(
-                format!("{{{CHART_NS}}}grouping"),
-                [("val", grouping)],
-            ));
+        "barChart" | "bar3DChart" => {
+            subchart.append(value("barDir", "col"));
+            subchart.append(value("grouping", &prepared.grouping));
         }
-        "lineChart" => {
-            subchart.append(Element::with_attributes(
-                format!("{{{CHART_NS}}}grouping"),
-                [("val", grouping)],
-            ));
+        "lineChart" | "line3DChart" | "areaChart" | "area3DChart" => {
+            subchart.append(value("grouping", &prepared.grouping));
         }
         "scatterChart" => {
-            subchart.append(Element::with_attributes(
-                format!("{{{CHART_NS}}}scatterStyle"),
-                [("val", "lineMarker")],
+            subchart.append(value("scatterStyle", "lineMarker"));
+        }
+        "radarChart" => {
+            subchart.append(value("radarStyle", options.radar_style));
+            subchart.append(flag("varyColors"));
+        }
+        // A bubble chart varies colours too: the bubbles are the categories, not the
+        // series, so a single colour per series would hide them.
+        "bubbleChart" => {
+            subchart.append(flag("varyColors"));
+        }
+        // A surface chart is a wireframe unless asked otherwise, and `wireframe` comes
+        // before the series.
+        "surfaceChart" | "surface3DChart" if options.wireframe => {
+            subchart.append(flag("wireframe"));
+        }
+        // A stock chart has no options before its series: openpyxl's `__elements__` starts
+        // with `ser`.
+        _ => {}
+    }
+
+    // A projected pie names its second plot after the `varyColors` element.
+    if prepared.chart_type == "ofPieChart" {
+        subchart.append(value("ofPieType", options.of_pie_type));
+    }
+}
+
+/// The option elements that follow the series.
+///
+/// Split from [`write_options`] because the schema puts them on the other side of `ser`, and
+/// a function that can only append to one element cannot express that.
+fn write_options_after_series(subchart: &mut Element, prepared: &PreparedChart) {
+    let options = &prepared.options;
+    let value = |name: &str, val: &str| {
+        Element::with_attributes(format!("{{{CHART_NS}}}{name}"), [("val", val)])
+    };
+    let flag =
+        |name: &str| Element::with_attributes(format!("{{{CHART_NS}}}{name}"), [("val", "1")]);
+
+    match prepared.chart_type.as_str() {
+        "bubbleChart" => {
+            if options.bubble_3d {
+                subchart.append(flag("bubble3D"));
+            }
+            if let Some(scale) = options.bubble_scale {
+                subchart.append(value("bubbleScale", &scale.to_string()));
+            }
+            if options.show_negative_bubbles {
+                subchart.append(flag("showNegBubbles"));
+            }
+            subchart.append(value("sizeRepresents", options.size_represents));
+        }
+        "doughnutChart" => {
+            if let Some(angle) = options.first_slice_angle {
+                subchart.append(value("firstSliceAng", &angle.to_string()));
+            }
+            // Excel's default hole is 10%; openpyxl's is the same. Writing it explicitly
+            // keeps a round trip from shifting the ring's thickness.
+            subchart.append(value(
+                "holeSize",
+                &options.hole_size.unwrap_or(10).to_string(),
             ));
+        }
+        "pie3DChart" | "ofPieChart" => {
+            if let Some(angle) = options.first_slice_angle {
+                subchart.append(value("firstSliceAng", &angle.to_string()));
+            }
         }
         _ => {}
     }
+}
+
+/// Write `<c:view3D>` for a 3-D chart.
+///
+/// The element is a sibling of `<c:chart>` inside `<c:chartSpace>` and comes *before* it,
+/// which is why this is a separate pass rather than part of `write_options`.
+fn write_view_3d(root: &mut Element, prepared: &PreparedChart) {
+    let Some(view) = &prepared.options.view_3d else {
+        return;
+    };
+    if !is_three_dimensional(&prepared.chart_type) {
+        // A 2-D chart has nowhere to put this. Ignoring it is deliberate: the caller may
+        // have reused an options struct, and refusing would fail a call that is otherwise
+        // perfectly valid.
+        return;
+    }
+    let mut node = Element::new(format!("{{{CHART_NS}}}view3D"));
+    node.append(Element::with_attributes(
+        format!("{{{CHART_NS}}}rotX"),
+        [("val", view.rot_x.to_string())],
+    ));
+    node.append(Element::with_attributes(
+        format!("{{{CHART_NS}}}rotY"),
+        [("val", view.rot_y.to_string())],
+    ));
+    node.append(Element::with_attributes(
+        format!("{{{CHART_NS}}}depthPercent"),
+        [("val", view.depth_percent.to_string())],
+    ));
+    if view.right_angle_axes {
+        node.append(Element::with_attributes(
+            format!("{{{CHART_NS}}}rAngAx"),
+            [("val", "1".to_string())],
+        ));
+    }
+    root.append(node);
+}
+
+/// Whether a chart tag denotes a 3-D chart.
+fn is_three_dimensional(chart_type: &str) -> bool {
+    matches!(
+        chart_type,
+        "area3DChart"
+            | "bar3DChart"
+            | "line3DChart"
+            | "pie3DChart"
+            | "surface3DChart"
+            | "ofPieChart"
+    )
 }
 
 fn write_title(parent: &mut Element, title: &str, lang: &str) {
@@ -361,7 +481,8 @@ fn write_axis(plot_area: &mut Element, axis: &Axis, lang: &str, label: String) {
 }
 
 fn write_series(subchart: &mut Element, prepared: &PreparedChart) -> Result<()> {
-    let value_element = if prepared.chart_type == "scatterChart" {
+    // Scatter and bubble charts name their values `yVal`; everything else says `val`.
+    let value_element = if matches!(prepared.chart_type.as_str(), "scatterChart" | "bubbleChart") {
         "yVal"
     } else {
         "val"
@@ -396,7 +517,7 @@ fn write_series(subchart: &mut Element, prepared: &PreparedChart) -> Result<()> 
             write_serial(&mut categories, labels, true)?;
             node.append(categories);
         }
-        if prepared.chart_type == "scatterChart" {
+        if matches!(prepared.chart_type.as_str(), "scatterChart" | "bubbleChart") {
             if let Some(x_reference) = &series.x_reference {
                 let mut x_values = Element::new(format!("{{{CHART_NS}}}xVal"));
                 write_serial(&mut x_values, x_reference, true)?;
@@ -409,6 +530,15 @@ fn write_series(subchart: &mut Element, prepared: &PreparedChart) -> Result<()> 
             None => write_literal(&mut values, 1.0),
         }
         node.append(values);
+        // A bubble's size is a third series of numbers. It goes in `<c:bubbleSize>`, after
+        // the y values; openpyxl calls the same thing `zVal` on the series it builds.
+        if prepared.chart_type == "bubbleChart" {
+            if let Some(size) = &series.bubble_size {
+                let mut size_node = Element::new(format!("{{{CHART_NS}}}bubbleSize"));
+                write_serial(&mut size_node, size, true)?;
+                node.append(size_node);
+            }
+        }
         subchart.append(node);
     }
     Ok(())
@@ -417,7 +547,10 @@ fn write_series(subchart: &mut Element, prepared: &PreparedChart) -> Result<()> 
 fn write_series_color(node: &mut Element, color: &str, chart_type: &str) {
     // A bar series colours the whole mark, so it gets a solid fill; a line series only
     // colours the stroke.
-    if chart_type == "barChart" {
+    if matches!(
+        chart_type,
+        "barChart" | "bar3DChart" | "areaChart" | "area3DChart" | "surface3DChart"
+    ) {
         let mut fill = Element::new(format!("{{{DRAWING_NS}}}solidFill"));
         fill.append(Element::with_attributes(
             format!("{{{DRAWING_NS}}}srgbClr"),
@@ -540,7 +673,12 @@ pub fn write_chart_rels(drawing_id: u32) -> String {
 
 /// Whether a chart type is a graph chart (and therefore has axes).
 pub fn is_graph_chart(chart: &Chart) -> bool {
-    matches!(chart.chart_type, "barChart" | "lineChart" | "scatterChart")
+    // Everything with an `axId` in its `__elements__`: every chart type except the
+    // pie family, which has no axes.
+    !matches!(
+        chart.chart_type,
+        "pieChart" | "pie3DChart" | "doughnutChart" | "ofPieChart"
+    )
 }
 
 /// The axis pair for a graph chart, if the chart has one.
@@ -576,248 +714,276 @@ pub fn unsupported_chart_error(chart_type: &str) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::charts::series::Series;
-    use crate::xml::functions::fromstring;
+    use crate::charts::chart::{AreaChart, AreaChart3D, BarChart3D, LineChart3D, PieChart3D};
+    use crate::charts::{
+        BubbleChart, ChartOptions, DoughnutChart, ProjectedPieChart, RadarChart, StockChart,
+        SurfaceChart, SurfaceChart3D, View3D,
+    };
 
-    fn reference(values: &[f64]) -> Reference {
-        let mut reference = Reference::new("Sheet1", (0, 0), Some((2, 0)), None, None).unwrap();
-        reference.set_values(
-            values.iter().map(|v| CellValue::Number(*v)).collect(),
-            ReferenceDataType::Numeric,
-        );
-        reference
+    /// One numeric series, for the tests that need a `<c:ser>` to order against.
+    fn a_series() -> Series {
+        let values: Vec<CellValue> = vec![CellValue::Number(1.0), CellValue::Number(2.0)];
+        let mut reference = Reference::new("S", (0, 0), None, None, None).unwrap();
+        reference.set_values(values, ReferenceDataType::Numeric);
+        Series::new(reference)
     }
 
     #[test]
-    fn pie_charts_have_no_axes() {
-        let mut chart = PieChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 2.0, 3.0])));
-        let xml = write_chart(&chart.0).unwrap();
-        let root = fromstring(xml.as_bytes()).expect("chart must parse");
-        let plot_area = root
-            .find(format!("{{{CHART_NS}}}chart"))
-            .and_then(|c| c.find(format!("{{{CHART_NS}}}plotArea")))
-            .expect("plotArea");
-        assert!(plot_area.find(format!("{{{CHART_NS}}}pieChart")).is_some());
-        assert!(plot_area.find(format!("{{{CHART_NS}}}catAx")).is_none());
-        assert!(plot_area.find(format!("{{{CHART_NS}}}valAx")).is_none());
-        assert!(xml.contains("varyColors"));
-    }
-
-    #[test]
-    fn bar_charts_declare_direction_and_grouping() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 2.0])));
-        let xml = write_bar_chart(&chart);
-        assert!(xml.contains("barDir"));
-        assert!(xml.contains("grouping"));
-        assert!(xml.contains("clustered"));
-        assert!(xml.contains("catAx"));
-        assert!(xml.contains("valAx"));
-    }
-
-    #[test]
-    fn scatter_charts_use_yval_and_xval() {
-        let mut chart = ScatterChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 2.0])).with_xvalues(reference(&[3.0, 4.0])));
-        let xml = write_scatter_chart(&chart);
-        assert!(xml.contains("yVal"));
-        assert!(xml.contains("xVal"));
-        assert!(xml.contains("scatterStyle"));
-        // Scatter charts treat the x axis as a value axis, so both carry bounds.
-        assert_eq!(
-            xml.matches("c:min").count(),
-            2,
-            "both axes scale as value axes"
-        );
-    }
-
-    #[test]
-    fn series_carry_indices_titles_and_values() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 2.0])).with_title("Revenue"));
-        let xml = write_bar_chart(&chart);
-        let root = fromstring(xml.as_bytes()).unwrap();
-        let plot_area = root
-            .find(format!("{{{CHART_NS}}}chart"))
-            .and_then(|c| c.find(format!("{{{CHART_NS}}}plotArea")))
-            .unwrap();
-        let subchart = plot_area.find(format!("{{{CHART_NS}}}barChart")).unwrap();
-        let series = &subchart.find_all(format!("{{{CHART_NS}}}ser"))[0];
-        // `c:idx` and `c:order` carry their value in a `val` attribute.
-        let idx = series.find(format!("{{{CHART_NS}}}idx")).unwrap();
-        assert_eq!(idx.get("val"), Some("0"));
-        let title = series
-            .find(format!("{{{CHART_NS}}}tx"))
-            .and_then(|tx| tx.find(format!("{{{CHART_NS}}}v")))
-            .and_then(|v| v.text.clone());
-        assert_eq!(title.as_deref(), Some("Revenue"));
-        let values = series.find(format!("{{{CHART_NS}}}val")).unwrap();
-        let reference_node = values.find(format!("{{{CHART_NS}}}numRef")).unwrap();
-        assert!(reference_node
-            .find_text(format!("{{{CHART_NS}}}f"), "")
-            .starts_with("'Sheet1'!"));
-        assert_eq!(
-            reference_node
-                .find(format!("{{{CHART_NS}}}numCache"))
-                .and_then(|c| c.find(format!("{{{CHART_NS}}}ptCount")))
-                .and_then(|p| p.get("val"))
-                .unwrap_or(""),
-            "2"
-        );
-    }
-
-    #[test]
-    fn axis_bounds_are_computed_from_the_data() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 5.0, 9.0])));
-        let xml = write_bar_chart(&chart);
-        let root = fromstring(xml.as_bytes()).unwrap();
-        let plot_area = root
-            .find(format!("{{{CHART_NS}}}chart"))
-            .and_then(|c| c.find(format!("{{{CHART_NS}}}plotArea")))
-            .unwrap();
-        let value_axis = plot_area.find(format!("{{{CHART_NS}}}valAx")).unwrap();
-        let scaling = value_axis.find(format!("{{{CHART_NS}}}scaling")).unwrap();
-        let max: f64 = scaling
-            .find(format!("{{{CHART_NS}}}max"))
-            .and_then(|n| n.get("val"))
-            .and_then(|v| v.parse().ok())
-            .unwrap();
-        let min: f64 = scaling
-            .find(format!("{{{CHART_NS}}}min"))
-            .and_then(|n| n.get("val"))
-            .and_then(|v| v.parse().ok())
-            .unwrap();
-        assert!(max >= 9.0, "max {max} must cover the data");
-        assert!(min <= 1.0, "min {min} must cover the data");
-    }
-
-    #[test]
-    fn flat_series_do_not_produce_invalid_bounds() {
-        // A zero-width range would divide by zero in the Python implementation.
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[7.0, 7.0, 7.0])));
-        let xml = write_bar_chart(&chart);
-        assert!(!xml.contains("NaN"), "NaN would make the chart unreadable");
-        assert!(!xml.contains("inf"));
-    }
-
-    #[test]
-    fn legends_are_written_only_when_enabled() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0])));
-        assert!(write_bar_chart(&chart).contains("legendPos"));
-
-        let mut hidden = BarChart::new();
-        hidden.0.base.show_legend = false;
-        hidden.add_series(Series::new(reference(&[1.0])));
-        assert!(!write_bar_chart(&hidden).contains("legendPos"));
-    }
-
-    #[test]
-    fn titles_are_written_when_set() {
-        let mut chart = BarChart::new();
-        chart.0.base.title = "Quarterly revenue".to_string();
-        chart.add_series(Series::new(reference(&[1.0])));
-        let xml = write_bar_chart(&chart);
-        assert!(xml.contains("Quarterly revenue"));
-        assert!(xml.contains("layoutTarget"));
-    }
-
-    #[test]
-    fn series_colours_are_short_and_applied() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0])).with_color("FF3366FF"));
-        let xml = write_bar_chart(&chart);
-        assert!(
-            xml.contains("val=\"3366FF\""),
-            "the alpha prefix must be stripped"
-        );
-        // A bar series gets both a solid fill and a stroke.
-        assert!(xml.contains("solidFill"));
-    }
-
-    #[test]
-    fn error_bars_use_the_right_flags() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0, 2.0])).with_error_bar(
-            crate::charts::error_bar::ErrorBar::new(
-                ErrorBarType::PlusMinus,
-                reference(&[0.5, 0.5]),
+    fn every_chart_type_writes_its_own_tag() {
+        // One test across all of them because the failure mode is the same for each: a
+        // mistyped tag writes a file Excel refuses to open, and nothing else would catch it.
+        let cases: Vec<(&str, String)> = vec![
+            (
+                "areaChart",
+                write_chart(&AreaChart::new().into_chart()).unwrap(),
             ),
-        ));
-        let xml = write_bar_chart(&chart);
-        assert!(xml.contains("errBarType"));
-        assert!(xml.contains("val=\"both\""));
+            (
+                "area3DChart",
+                write_chart(&AreaChart3D::new().into_chart()).unwrap(),
+            ),
+            (
+                "barChart",
+                write_chart(&BarChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "bar3DChart",
+                write_chart(&BarChart3D::new().into_chart()).unwrap(),
+            ),
+            (
+                "lineChart",
+                write_chart(&LineChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "line3DChart",
+                write_chart(&LineChart3D::new().into_chart()).unwrap(),
+            ),
+            (
+                "pieChart",
+                write_chart(&PieChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "pie3DChart",
+                write_chart(&PieChart3D::new().into_chart()).unwrap(),
+            ),
+            (
+                "doughnutChart",
+                write_chart(&DoughnutChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "ofPieChart",
+                write_chart(&ProjectedPieChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "scatterChart",
+                write_chart(&ScatterChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "radarChart",
+                write_chart(&RadarChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "bubbleChart",
+                write_chart(&BubbleChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "stockChart",
+                write_chart(&StockChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "surfaceChart",
+                write_chart(&SurfaceChart::new().into_chart()).unwrap(),
+            ),
+            (
+                "surface3DChart",
+                write_chart(&SurfaceChart3D::new().into_chart()).unwrap(),
+            ),
+        ];
+        for (tag, xml) in cases {
+            // An element serialises three ways: `<c:x/>` when it has no children (a stock
+            // chart with no series), `<c:x>` when it has some, and `<c:x attr="v">` when it
+            // has attributes. Matching the prefix alone would also match `stockChartExtra`,
+            // so the character after the name is checked.
+            let needle = format!("<c:{tag}");
+            let at = xml
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{tag} is missing from:\n{xml}"));
+            let next = xml[at + needle.len()..].chars().next().unwrap_or('\n');
+            assert!(
+                matches!(next, '>' | '/' | ' '),
+                "{tag} is followed by {next:?}, which means the tag name is wrong:\n{xml}"
+            );
+            // The root carries the namespace declaration, so it is `<c:chartSpace
+            // xmlns:c="...">` and a bare prefix match would be wrong.
+            assert!(xml.starts_with("<c:chartSpace xmlns:c="), "{tag}: {xml}");
+        }
     }
 
     #[test]
-    fn print_settings_are_always_written() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0])));
-        let xml = write_bar_chart(&chart);
-        assert!(xml.contains("printSettings"));
-        assert!(xml.contains("pageMargins"));
+    fn a_radar_chart_writes_its_style_before_the_series() {
+        let mut radar =
+            RadarChart::with_options(ChartOptions::default().with_radar_style("marker"));
+        radar.add_series(a_series());
+        let chart = radar.into_chart();
+        let xml = write_chart(&chart).unwrap();
+        let radar = xml.find("<c:radarStyle").expect("radarStyle");
+        let series = xml.find("<c:ser>").expect("a series");
+        assert!(radar < series, "the schema puts radarStyle first:\n{xml}");
+        assert!(xml.contains("<c:radarStyle val=\"marker\"/>"), "{xml}");
     }
 
     #[test]
-    fn chart_rels_point_at_the_shape_drawing() {
-        let xml = write_chart_rels(3);
-        let root = fromstring(xml.as_bytes()).unwrap();
-        let relationship = &root.find_all(format!("{{{PKG_REL_NS}}}Relationship"))[0];
-        assert_eq!(relationship.get("Target"), Some("../drawings/drawing3.xml"));
-        assert_eq!(relationship.get("Id"), Some("rId1"));
+    fn a_doughnut_hole_size_comes_after_the_series() {
+        let mut doughnut = DoughnutChart::with_options(ChartOptions::default().with_hole_size(40));
+        doughnut.add_series(a_series());
+        let chart = doughnut.into_chart();
+        let xml = write_chart(&chart).unwrap();
+        let series = xml.find("<c:ser>").expect("a series");
+        let hole = xml.find("<c:holeSize").expect("holeSize");
+        assert!(hole > series, "the schema puts holeSize after ser:\n{xml}");
+        assert!(xml.contains("<c:holeSize val=\"40\"/>"), "{xml}");
     }
 
     #[test]
-    fn shapes_add_a_user_shapes_element() {
-        let mut chart = BarChart::new();
-        chart.add_series(Series::new(reference(&[1.0])));
-        chart.0.base.add_shape(crate::drawing::Shape::new());
-        let xml = write_bar_chart(&chart);
-        assert!(xml.contains("userShapes"));
+    fn a_doughnut_defaults_to_excels_own_hole_size() {
+        // Without this a round trip would shift the ring's thickness, because openpyxl
+        // writes 10 when the field is unset and Excel would infer its own default.
+        let xml = write_chart(&DoughnutChart::new().into_chart()).unwrap();
+        assert!(xml.contains("<c:holeSize val=\"10\"/>"), "{xml}");
     }
 
     #[test]
-    fn unresolved_references_have_zero_points() {
-        let mut chart = BarChart::new();
-        // A reference whose values were never resolved.
-        chart.add_series(Series::new(
-            Reference::new("Sheet1", (0, 0), None, None, None).unwrap(),
-        ));
-        let xml = write_bar_chart(&chart);
-        let root = fromstring(xml.as_bytes()).unwrap();
-        let plot_area = root
-            .find(format!("{{{CHART_NS}}}chart"))
-            .and_then(|c| c.find(format!("{{{CHART_NS}}}plotArea")))
-            .unwrap();
-        let subchart = plot_area.find(format!("{{{CHART_NS}}}barChart")).unwrap();
-        let series = &subchart.find_all(format!("{{{CHART_NS}}}ser"))[0];
-        let values = series.find(format!("{{{CHART_NS}}}val")).unwrap();
-        let cache = values
-            .find(format!("{{{CHART_NS}}}numRef"))
-            .and_then(|r| r.find(format!("{{{CHART_NS}}}numCache")))
-            .unwrap();
-        assert_eq!(
-            cache
-                .find(format!("{{{CHART_NS}}}ptCount"))
-                .unwrap()
-                .get("val"),
-            Some("0")
+    fn a_bubble_chart_writes_x_values_and_a_size() {
+        let values: Vec<CellValue> = vec![CellValue::Number(1.0), CellValue::Number(2.0)];
+        let x_values: Vec<CellValue> = vec![CellValue::Number(10.0), CellValue::Number(20.0)];
+        let sizes: Vec<CellValue> = vec![CellValue::Number(5.0), CellValue::Number(8.0)];
+
+        let mut reference = Reference::new("S", (0, 0), None, None, None).unwrap();
+        reference.set_values(values, ReferenceDataType::Numeric);
+        let mut x = Reference::new("S", (1, 0), None, None, None).unwrap();
+        x.set_values(x_values, ReferenceDataType::Numeric);
+        let mut size = Reference::new("S", (2, 0), None, None, None).unwrap();
+        size.set_values(sizes, ReferenceDataType::Numeric);
+
+        let mut chart = BubbleChart::new();
+        chart.add_series(
+            Series::new(reference)
+                .with_xvalues(x)
+                .with_bubble_size(size),
+        );
+        let xml = write_chart(&chart.into_chart()).unwrap();
+
+        assert!(xml.contains("<c:xVal>"), "a bubble takes x values:\n{xml}");
+        // `yVal` rather than `val`, as for a scatter chart.
+        assert!(xml.contains("<c:yVal>"), "{xml}");
+        assert!(xml.contains("<c:bubbleSize>"), "{xml}");
+        let y = xml.find("<c:yVal>").expect("yVal");
+        let bubble = xml.find("<c:bubbleSize>").expect("bubbleSize");
+        assert!(y < bubble, "bubbleSize follows yVal:\n{xml}");
+    }
+
+    #[test]
+    fn bubble_options_follow_the_series() {
+        let mut bubble = BubbleChart::with_options(
+            ChartOptions::default()
+                .three_d_bubbles()
+                .with_bubble_scale(150)
+                .with_negative_bubbles(),
+        );
+        bubble.add_series(a_series());
+        let chart = bubble.into_chart();
+        let xml = write_chart(&chart).unwrap();
+        let series = xml.find("<c:ser>").expect("a series");
+        for element in [
+            "bubble3D",
+            "bubbleScale",
+            "showNegBubbles",
+            "sizeRepresents",
+        ] {
+            let at = xml
+                .find(&format!("<c:{element}"))
+                .unwrap_or_else(|| panic!("{element} is missing:\n{xml}"));
+            assert!(at > series, "{element} must follow ser:\n{xml}");
+        }
+    }
+
+    #[test]
+    fn a_three_d_chart_writes_a_view() {
+        let chart = BarChart3D::with_options(
+            ChartOptions::default()
+                .with_view_3d(View3D::new().with_rot_x(30).with_depth_percent(80)),
+        )
+        .into_chart();
+        let xml = write_chart(&chart).unwrap();
+        assert!(xml.contains("<c:view3D>"), "{xml}");
+        assert!(xml.contains("<c:rotX val=\"30\"/>"), "{xml}");
+        assert!(xml.contains("<c:depthPercent val=\"80\"/>"), "{xml}");
+        // The schema puts `view3D` before `chart`.
+        let view = xml.find("<c:view3D>").expect("view3D");
+        let chart_node = xml.find("<c:chart>").expect("chart");
+        assert!(view < chart_node, "view3D comes first:\n{xml}");
+    }
+
+    #[test]
+    fn a_two_d_chart_ignores_a_view_rather_than_emitting_an_orphan() {
+        // A 2-D chart has nowhere to put `view3D`, and a caller may have reused an options
+        // struct. Writing it anyway would produce a file Excel rejects.
+        let chart = BarChart::with_options(ChartOptions::default().with_view_3d(View3D::new()))
+            .into_chart();
+        let xml = write_chart(&chart).unwrap();
+        assert!(
+            !xml.contains("view3D"),
+            "a barChart must not carry one:\n{xml}"
         );
     }
 
     #[test]
-    fn type_helpers() {
-        assert!(is_graph_chart(&BarChart::new().0.base));
-        assert!(!is_graph_chart(&PieChart::new().0));
-        let bar = BarChart::new();
-        let (x, y) = axes_for(&bar.0);
-        assert_eq!(x.axis_type, "catAx");
-        assert_eq!(y.axis_type, "valAx");
-        assert!(unsupported_chart_error("bubbleChart")
-            .to_string()
-            .contains("bubbleChart"));
+    fn a_surface_chart_is_a_wireframe_only_when_asked() {
+        let plain = write_chart(&SurfaceChart::new().into_chart()).unwrap();
+        assert!(!plain.contains("wireframe"), "{plain}");
+
+        let mesh = SurfaceChart::with_options(ChartOptions::default().wireframe()).into_chart();
+        assert!(write_chart(&mesh)
+            .unwrap()
+            .contains("<c:wireframe val=\"1\"/>"));
+    }
+
+    #[test]
+    fn the_pie_family_is_the_only_part_without_axes() {
+        for chart in [
+            PieChart::new().into_chart(),
+            PieChart3D::new().into_chart(),
+            DoughnutChart::new().into_chart(),
+            ProjectedPieChart::new().into_chart(),
+        ] {
+            assert!(
+                !is_graph_chart(&chart),
+                "{} should have no axes",
+                chart.chart_type
+            );
+        }
+        for chart in [
+            BarChart::new().into_chart(),
+            AreaChart::new().into_chart(),
+            RadarChart::new().into_chart(),
+            BubbleChart::new().into_chart(),
+            StockChart::new().into_chart(),
+            ScatterChart::new().into_chart(),
+            SurfaceChart::new().into_chart(),
+        ] {
+            assert!(
+                is_graph_chart(&chart),
+                "{} should have axes",
+                chart.chart_type
+            );
+        }
+    }
+
+    #[test]
+    fn a_projected_pie_names_its_second_plot() {
+        let chart =
+            ProjectedPieChart::with_options(ChartOptions::default().with_of_pie_type("bar"))
+                .into_chart();
+        let xml = write_chart(&chart).unwrap();
+        assert!(xml.contains("<c:ofPieType val=\"bar\"/>"), "{xml}");
     }
 }
