@@ -35,7 +35,8 @@ const MAX_ROW: u32 = 1_048_576;
 /// A rectangular range of cells, stored as its corners.
 ///
 /// Bounds are 1-based and inclusive at both ends, matching how a caller reads `A1:C3`.
-/// This is the opposite of [`RangeBounds`][bounds], whose `max_col` is exclusive because it
+/// This is the opposite of [`RangeBounds`](crate::worksheet::iter_worksheet::RangeBounds), whose `max_col` is
+/// exclusive because it
 /// comes out of a range string, and mixing the two is the single easiest way to get an
 /// off-by-one here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -118,7 +119,7 @@ impl CellRange {
 
     /// The coordinates the range covers, row by row.
     ///
-    /// Bounded by [`CellRange::ITERATION_LIMIT`] cells. A whole-column range would otherwise
+    /// Bounded by [`ITERATION_LIMIT`] cells. A whole-column range would otherwise
     /// be sixteen thousand wide and a whole-sheet range over sixteen million, which is not a
     /// useful return value and would exhaust memory rather than fail.
     pub fn cells(&self) -> Result<Vec<String>> {
