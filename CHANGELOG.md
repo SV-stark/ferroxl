@@ -5,6 +5,70 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-10-02
+
+Cell dependency tracing, and a streaming writer that does not need the whole sheet in
+memory.
+
+### Added
+
+#### The `ferroxl` library
+
+- **`worksheet::dependency`** - `Worksheet::trace_precedents` returns every cell that feeds
+  a cell, transitively, in the order a recalculation would visit them.
+  `Worksheet::trace_dependents` returns the formulas that would go stale if a cell
+  changed. `Worksheet::circular_references` reports each cycle once as a closed path.
+  `Worksheet::dependency_graph` exposes the whole `cell -> cells it reads` map, and
+  `parse_references` pulls the references out of a formula on its own.
+- **`DumpWorksheet`** and `save_dump`, the streaming writer. Rows are serialised as they
+  are produced rather than collected into a `String` first, so peak memory is set by the
+  largest row instead of the largest sheet.
+
+### Changed
+
+- `write_worksheet` is split into a head, the rows and a tail, which both writers share. A
+  streaming writer that quietly emitted different XML would be worse than no streaming
+  writer, so the two are tested against each other at the worksheet level and across every
+  entry in the package.
+
+### Fixed
+
+- The package comparison in the streaming writer's tests compares parts rather than raw
+  zip bytes. `start_file` and `writestr!` do not choose the same compression, so a byte
+  comparison was asserting an accident of the writer rather than a property of the format.
+
+### Notes on the tracer
+
+Two answers are refused rather than guessed. A reference through a defined name is
+reported by `References::named` instead of being resolved, because a name may cover any
+range in the workbook and a guess would produce a graph that looks authoritative and is
+not. A cross-sheet reference keeps its sheet title in `References::cross_sheet` rather
+than being expanded, because the range behind one may be far larger than the formula that
+mentions it.
+
+The graph is built from formula text, so a reference that some other tool wrote as an
+unresolved name is invisible until that name is resolved. `References::named` is where
+that shows up, which is the reason it exists.
+
+## Added to the MCP server
+
+- `trace_precedents` - what a cell is actually built from.
+- `trace_dependents` - the blast radius of changing a cell.
+- `check_circular_references` - every cycle in a sheet as a closed path. Excel refuses to
+  calculate a workbook with one, so this is worth running before trusting a file you did
+  not create.
+
+Summaries name at most a dozen cells and then count the rest. A sheet with a few thousand
+dependents would fill the context window with a list that cannot change the model's next
+decision, and the count is the part that can.
+
+## See also
+
+`ROADMAP.md` records eight further proposals that were considered for this release, what
+each would cost, and why only one of them shipped. Three of them - formula evaluation,
+non-destructive editing and rayon parallelism - each change the build-time dependency set
+or the round-trip model, and are scheduled against the major versions.
+
 ## [0.1.0] — 2026-10-02
 
 The first release. ferroxl is a Rust port of openpyxl 1.9.0: the same modules, the same

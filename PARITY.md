@@ -215,21 +215,11 @@ structure (9), values (4), layout and appearance (8) and drawing (3). See the
 Six areas where openpyxl has something ferroxl does not, ordered by how likely they are to
 matter.
 
-### 1. The streaming writer (writer/dump_worksheet.py)
+### 1. ~~The streaming writer (writer/dump_worksheet.py)~~ — shipped in 0.1.2
 
-openpyxl has two writers. The default one builds a tree in memory; `dump_worksheet.py`
-provides the second, `lxml`-based path used by `ExcelWriter` for large sheets, which
-streams rows out as they are produced and never holds a whole sheet in memory. It carries
-`DumpWorksheet`, `ExcelDumpWriter`, `StyleDumpWriter`, `save_dump`,
-`create_temporary_file`, and the `STYLES` / `DATETIME_STYLE` / `BOUNDING_BOX_PLACEHOLDER` /
-`DESCRIPTORS_CACHE_SIZE` constants that go with it.
-
-**Effect.** ferroxl writes a workbook correctly, but peak memory scales with the size of the
-sheet being written. For the sheets an agent typically produces this does not matter; for a
-hundred-thousand-row export it would.
-
-**What to do instead.** Nothing today — `Workbook::save` and `save_workbook_to` are the
-only paths.
+`DumpWorksheet` and `save_dump` are ported. `write_worksheet` is split into a head, the
+rows and a tail so both writers share the serialisation, and the two are tested against
+each other because a streaming writer that emitted different XML would be worse than none.
 
 ### 2. Worksheet range with offsets, rows and columns
 
