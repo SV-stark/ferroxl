@@ -4,11 +4,16 @@ A Rust library for reading and writing Excel 2007 `.xlsx`/`.xlsm` files, plus a
 [Model Context Protocol](https://modelcontextprotocol.io) server that exposes it to AI
 agents.
 
-ferroxl is a feature-parity port of [openpyxl](https://github.com/theorchard/openpyxl).
-It follows the Python package's module layout, class names and semantics, so a change can
-be traced back to the Python it mirrors. Where Python's behaviour cannot be reproduced in
-Rust — hash-based equality, tri-state booleans, PIL-backed images — the deviation is
-documented at the call site and the closest faithful behaviour is implemented instead.
+ferroxl is a feature-parity port of [openpyxl](https://github.com/theorchard/openpyxl)
+3.1.5. It follows the Python package's module layout, class names and semantics, so a
+change can be traced back to the Python it mirrors. Where Python's behaviour cannot be
+reproduced in Rust — hash-based equality, tri-state booleans, PIL-backed images — the
+deviation is documented at the call site and the closest faithful behaviour is implemented
+instead.
+
+Parity is real but partial, and `PARITY.md` is the honest accounting: what is ported, what
+differs, and what is not there at all. The largest absences are pivot tables, chart-only
+sheets, named styles, gradient fills and rich text.
 
 ```
 crates/
@@ -173,8 +178,17 @@ switches as the Python call:
 | `data_only` | `values_only()` | Return the value Excel last cached instead of the formula |
 | `keep_vba` | `keeping_vba()` | Keep the original package bytes so the VBA project survives a save |
 
-Those three are the whole of openpyxl 1.9's `load_workbook` switches. Rich text is
-concatenated with its formatting discarded, which is also what openpyxl 1.9 does.
+Three of openpyxl 3.1.5's `load_workbook` switches are implemented. Three are not, and the
+differences run in both directions:
+
+- **`guess_types` has no counterpart upstream.** openpyxl removed it in 3.0; it was a 2.x
+  flag. ferroxl keeps it because the behaviour is useful and cheap, but it is not part of
+  the surface being ported, so a script written against openpyxl 3 will not find it.
+- **`read_only`, `keep_links` and `rich_text` are not implemented.** `read_only` would
+  need a streaming loader — see [Pending](#not-implemented) in `PARITY.md`. `keep_links`
+  needs external-link parts, which are not read or written at all. `rich_text` needs the
+  inline-runs model in cells, which does not exist; a rich-text cell is concatenated with
+  its formatting discarded, which is what openpyxl does too when `rich_text=False`.
 
 A value read back from a file is always reconstructed from the serial, so a date cell
 reports a `DateTime` — the same as openpyxl, which also loses the distinction between
@@ -304,7 +318,7 @@ output in the tests.
 documents. ferroxl ships the same 56 and rejects an index past the end, because matching
 the upstream table is more useful than matching the documentation.
 
-**Charts and images are written but not read back.** openpyxl 1.9 writes chart and drawing
+**Charts and images are written but not read back.** openpyxl 3.1.5 writes chart and drawing
 parts but its reader does not parse them, so a reloaded workbook reports no charts. ferroxl
 matches that, rather than being half-compatible in a different way.
 

@@ -1,6 +1,6 @@
-# Feature parity with openpyxl 1.9.0
+# Feature parity with openpyxl 3.1.5
 
-ferroxl is a port of [openpyxl](https://github.com/theorchard/openpyxl) 1.9.0. This document
+ferroxl is a port of [openpyxl](https://github.com/theorchard/openpyxl) 3.1.5. This document
 records, module by module, what has been implemented, what has not, and where the Rust
 version deliberately behaves differently.
 
@@ -19,6 +19,7 @@ Re-run it after any change. The numbers below come from that run.
 - [Implemented](#implemented)
 - [Pending](#pending)
 - [Different by design](#different-by-design)
+- [Packages with no Rust counterpart at all](#packages-with-no-rust-counterpart-at-all)
 - [Not ported](#not-ported)
 - [How parity is verified](#how-parity-is-verified)
 
@@ -34,24 +35,47 @@ Three labels are used, and they mean different things:
 
 ## Summary
 
+The reference is **openpyxl 3.1.5**, the tree at the path recorded in `tools/parity.py`'s
+invocation below. This document previously described a 1.9-era surface and understated the
+gap by a wide margin; the numbers here are from a run against 3.1.5.
+
 | | |
 | --- | --- |
-| Python modules audited | 70 |
-| Modules whose every public name is matched | 47 |
-| openpyxl public names | 272 |
-| Names with no ferroxl counterpart | 77 |
+| openpyxl top-level names audited | 994 |
+| Modules whose every public name is matched | 31 of 183 |
+| Names with no ferroxl counterpart | 741 |
 
-Of those 77 unmatched names:
+Unmatched names, by upstream package:
 
-| Bucket | Names | What it is |
+| Package | Unmatched | What it is |
 | --- | --- | --- |
-| Genuinely pending | 13 | [The streaming writer](#1-the-streaming-writer-writerdump_worksheetpy), [zip repair](#5-zip-central-directory-repair), and the reader types behind them |
-| Renamed or reshaped | 37 | A name changed, or a Python container became a Rust type — see [Different by design](#different-by-design) |
-| Python-only infrastructure | 27 | `lxml` iterators, namespace registration, the `compat` shims, and regexes and tag constants that openpyxl keeps to itself — see [Not ported](#not-ported) |
+| `drawing/` | 127 | Shape geometry and the `spPr` tree; ferroxl has image sizing only |
+| `worksheet/` | 124 | Tables, views, cell ranges, filters, OLE, scenarios, print ranges |
+| `styles/` | 100 | Named styles, gradient fills, `StyleArray`, table styles, dxf extras |
+| `chart/` | 82 | Nine of thirteen chart types, labels, trendlines, layout, 3-D |
+| `pivot/` | 58 | The whole pivot table and pivot cache model |
+| `descriptors/` | 49 | The `Serialisable` base and the typed descriptor system |
+| `xml/` | 41 | Namespace registration, `iterparse`, tag constants |
+| `utils/` | 35 | `FORMULAE`, escaping, `IndexedList`, dataframe bridge, open-ended ranges |
+| `workbook/` | 35 | Calculation properties, book views, external links, file sharing, web options |
+| `packaging/` | 34 | Manifest, relationship and content-type construction |
+| `cell/` | 24 | Rich text, phonetic text, inline fonts |
+| `chartsheet/` | 11 | Sheets whose only content is a chart |
+| `formatting/` | 7 | Data bars, icon-set rules, `cfvo/@gte`, `Rule/@timePeriod` |
+| `comments/` | 5 | Comment shape and sizing details |
+| `reader/` | 5 | `SharedStrings`, `ExcelReader`, rich-text reading |
+| `formula/` | 3 | The tokenizer and `FORMULAE` — `Translator` **is** ported |
 
-Two further gaps are *method-level* and so do not appear in a top-level-name audit:
-[`Worksheet.range()` with offsets, `rows` and `columns`](#2-worksheet-range-with-offsets-rows-and-columns),
-and [charts not being read back](#6-charts-and-images-are-written-but-not-read-back).
+Three further gaps are *method-level* and do not appear in a top-level-name audit:
+[`Worksheet::range()` with offsets](#2-worksheet-range-with-offsets-rows-and-columns),
+[no read-only loader](#3-there-is-no-read-only-loader), and
+[charts not read back](#6-charts-and-images-are-written-but-not-read-back).
+
+The honest summary of where ferroxl stands: **cell values, styles, and the read/write round
+trip are solid; everything around the cell is thin.** A workbook with pivot tables, named
+styles, gradient fills, rich text or chart-only sheets in it will lose those parts on save.
+That is not a rounding error against "feature parity" — it is a materially different library
+from openpyxl, and this document exists to say so precisely rather than approximately.
 
 ## Implemented
 
@@ -139,12 +163,24 @@ match the upstream tables.
 ### `reader` — `openpyxl/reader`
 
 The whole load path: `load_workbook`, `load_workbook_from_bytes`, `LoadOptions` with
-`guess_types`, `data_only` and `keep_vba` — matching openpyxl 1.9's four parameters, plus
-the `new` / `guessing_types` / `values_only` / `keeping_vba` builders; `WorkbookSource`,
-`package_bytes`, `read_string_table`, `read_style_table`, `read_worksheet`,
-`read_comments`, `comments_file_path`, `read_sheets`, `read_rels`, `read_content_types`,
+`guess_types`, `data_only` and `keep_vba`, plus the `new` / `guessing_types` /
+`values_only` / `keeping_vba` builders; `WorkbookSource`, `package_bytes`,
+`read_string_table`, `read_style_table`, `read_worksheet`, `read_comments`,
+`comments_file_path`, `read_sheets`, `read_rels`, `read_content_types`,
 `read_properties_core`, `read_excel_base_date`, `read_workbook_settings`,
 `read_named_ranges`, `title_resolver`, `detect_worksheets`.
+
+Three of openpyxl 3.1.5's six `load_workbook` parameters are implemented, and the three
+that are not are not interchangeable with the one ferroxl has that upstream dropped:
+
+| Parameter | ferroxl |
+| --- | --- |
+| `keep_vba` | `keep_vba` |
+| `data_only` | `data_only` |
+| `read_only` | **absent** — needs the streaming loader, see [Pending](#3-there-is-no-read-only-loader) |
+| `keep_links` | **absent** — no external-link parts are read or written |
+| `rich_text` | **absent** — no inline-runs model in cells |
+| *(removed in 3.0)* `guess_types` | `guess_types` — a 2.x flag with no 3.x counterpart |
 
 The worksheet reader walks the XML tree recursively rather than matching a tag list, which
 matches openpyxl's `iterparse(tag=...)` behaviour: a `<col>` inside `<cols>` and a `<pane>`
@@ -228,31 +264,46 @@ each other because a streaming writer that emitted different XML would be worse 
 properties built on it.
 
 ferroxl has `range_values(range) -> Vec<Vec<CellValue>>` and
-`range_coordinates(range) -> Vec<String>`. There is no equivalent that hands back a
-rectangle of `Cell`s, no row/column offset arguments, and no `rows` or `columns`.
+`range_coordinates(range) -> Vec<String>`, plus `iter_rows()` / `iter_cols()` and their
+explicit-bounds forms. There is no equivalent that hands back a rectangle of `Cell`s, and
+no row/column offset arguments on a `range()`.
 
-**Effect.** `for row in ws.rows: row[0].value = x` has no direct spelling. The same edit is
-`ws.set(coord, value)` per coordinate, or `ws.set_cell_value(coord, value)`. Read-only use
-is covered by `range_values`.
+**Effect.** `for row in ws.rows: row[0].value = x` has no direct spelling for writing. The
+same edit is `ws.set(coord, value)` per coordinate, or `ws.set_cell_value(coord, value)`.
+Read-only use is covered by `iter_rows` and `range_values`.
 
 **What to do instead.** Use `range_values` to read and `set` / `set_cell_value` to write.
 
-### 3. The use_iterators flag has no loader
+### 3. There is no read-only loader
 
-openpyxl's `load_workbook(..., use_iterators=True)` hands back an `IterableWorksheet`, which
+openpyxl's `load_workbook(..., read_only=True)` hands back a `ReadOnlyWorksheet`, which
 parses a sheet's XML lazily and yields `ReadOnlyCell`s one at a time without building a
 `Worksheet`. That is how openpyxl reads a hundred-megabyte sheet.
+
+> The 2.x spelling of this flag was `use_iterators`; 3.x renamed it to `read_only` and
+> `use_iterators` no longer exists. The gap is the same one either name.
 
 ferroxl has the value type — `cell::ReadOnlyCell`, with `coordinate`, `internal_value`,
 `number_format`, `is_date`, `value` and `datetime`, plus the `ReadOnlyTables` it resolves
 against — and both are public and constructible. Nothing in `load_workbook` produces them:
-there is no `use_iterators` option and no iterator over a worksheet's cells.
+there is no `read_only` option and no iterator over a worksheet's cells.
+
+`ReadOnlyCell` is also missing the style accessors openpyxl's version has: `style_array`,
+`has_style`, `font`, `fill`, `border`, `alignment`, `protection`. It exposes values and
+number formats, not formatting.
 
 **Effect.** Reading a workbook materialises every sheet. For the sheets an agent typically
 opens this does not matter; for a very large one it would.
 
-**What to do instead.** Nothing today. `ReadOnlyCell` is exercised by tests but is not yet
+**What to do instead.** Nothing today. `ReadOnlyCell` is exercised by tests but is not
 reachable from a loaded workbook.
+
+### 3a. `Worksheet::iter_rows` and `iter_cols`
+
+Shipped in 0.1.3: `iter_rows()` and `iter_cols()` walk the used range row-major and
+column-major, plus `iter_rows_within` / `iter_cols_within` for explicit inclusive bounds.
+This closes the `rows` / `columns` half of [item 2](#2-worksheet-range-with-offsets-rows-and-columns);
+the offset-taking `range()` and the rectangle of `Cell`s it returns are still pending.
 
 ### 4. The stored dimension element is not read
 
@@ -277,13 +328,13 @@ transit or with junk appended.
 
 ### 6. Charts and images are written but not read back
 
-openpyxl 1.9 writes chart and drawing parts but its reader does not parse them, so a
+openpyxl 3.1.5 writes chart and drawing parts but its reader does not parse them, so a
 reloaded workbook reports no charts and no images. ferroxl matches this rather than being
 half-compatible in a different direction.
 
 **Effect.** `worksheet.charts` and `worksheet.images` are empty after a load, even though
 the parts are in the file. Anything that depends on reading a chart back — inspecting an
-existing chart, preserving one across an edit — does not work, in ferroxl or in openpyxl 1.9.
+existing chart, preserving one across an edit — does not work, in ferroxl or in openpyxl 3.1.5.
 
 This one is a *parity* gap rather than a *capability* gap: ferroxl behaves exactly as the
 reference does.
@@ -347,7 +398,7 @@ replace:
 | `worksheet.add_chart(chart, anchor)` | `worksheet.charts.push(chart)` — the anchor is a field on the chart | The `Vec` is public |
 | `worksheet.add_image(image, anchor)` | `worksheet.images.push(image)` | Same |
 | `worksheet.add_rel(...)` | `worksheet.relationships.push(...)` | Same |
-| `ws.max_row`, `ws.max_column` | `ws.highest_row()`, `ws.highest_column()` | Matches openpyxl 1.9's `get_highest_row` |
+| `ws.max_row`, `ws.max_column` | `ws.highest_row()`, `ws.highest_column()` | Matches openpyxl 3.1.5's `get_highest_row` |
 | `cell.value` | `cell.internal_value()`, or `worksheet.cell_value(coord)` | A method, so the type cast runs |
 | `StyleWriter`, `ChartWriter`, `CommentWriter`, `DrawingWriter`, `ShapeWriter` | `write_style_table`, `write_chart`, `write_comments`, `write_drawing`, `write_shapes` | See below |
 | `load_workbook(..., read_only=True)` | `LoadOptions::guessing_types()` / `values_only()` / `keeping_vba()` | Builders instead of keyword arguments |
@@ -371,6 +422,148 @@ refactor: the function-shaped writers have nowhere to put a stream.
 openpyxl keeps the style table in insertion order. ferroxl sorts by `Style::sort_key` so two
 runs that build the same set of styles produce byte-identical output. Excel does not care
 about the order; a diff does.
+
+## Packages with no Rust counterpart at all
+
+These are whole upstream packages with no module to point at. They are the largest part of
+the gap and the reason the headline number above is as bad as it is.
+
+### `pivot/` — 58 classes, ~3,700 lines
+
+The pivot table and pivot cache model: `TableDefinition`, `CacheDefinition`, `CacheField`,
+`SharedItems`, `PivotField`, `DataField`, `PageField`, `FieldGroup`, `RecordList`,
+`CacheSource`, `WorksheetSource`, and 40 more. ferroxl contains the string
+`PivotStyleLight16` as a default style name and a `sheetProtection/@pivotTables` flag,
+which is the entirety of its pivot surface.
+
+**Effect.** A pivot table cannot be created, inspected or edited. Worse, because the parts
+are not preserved, **saving a loaded workbook silently destroys every pivot table and pivot
+cache it contained.** This is the most damaging single gap in this document: it is data
+loss on a round trip, not a missing feature.
+
+### `chartsheet/` — 11 classes, ~760 lines
+
+`Chartsheet` and its views, properties, protection and relation types: a workbook sheet
+whose entire content is one chart, written to `xl/chartsheets/sheetN.xml`. ferroxl's
+`Workbook` has `worksheets` and no `chartsheets`; the reader never looks in
+`xl/chartsheets/`.
+
+**Effect.** A chart-only sheet cannot be created, and any in a loaded file is dropped on
+save. Same round-trip loss as pivot tables.
+
+### `descriptors/` — 49 names
+
+openpyxl's metaprogramming layer: `Serialisable` with `to_tree`/`from_tree`, the typed
+descriptors (`Integer`, `Float`, `Bool`, `String`, `Set`, `NoneSet`, `MinMax`, `DateTime`),
+the `Sequence` family, the `Nested` family, and `excel.py`'s `HexBinary`, `TextPoint`,
+`Percentage`, `Extension`, `ExtensionList`, `Guid`, `Base64Binary`.
+
+There is no trait, macro or derive in ferroxl that mirrors this. Every Rust type is a
+hand-written struct with a hand-written attribute list and a hand-written parse function.
+
+**Effect.** The port cannot express a new OOXML construct without hand-writing both halves
+of it, so anything not explicitly modelled for the ~20 supported types is dropped without
+error. In particular `extLst` is not read or written anywhere.
+
+This is a different *kind* of gap from the others. It is not missing features; it is the
+mechanism that would make adding features cheap. Porting it is a rewrite of the reader and
+writer, not an addition to them, which is why it is not attempted incrementally.
+
+### `packaging/` — 34 names, ~1,800 lines
+
+`Manifest`, `Relationship`, `Override`, `FileSharing`, `save`, `get_dependents`. ferroxl
+builds the manifest, content types and relationships itself in `writer/`, and
+`worksheet/relationship.rs` covers the relationship type. The *constructors* differ; the
+behaviour largely does not.
+
+**Effect.** Small. This is the closest of the six to a naming-and-shape difference, and
+PARITY.md should not have implied otherwise by omitting it.
+
+### `chart/` — 82 unmatched names of 93
+
+ferroxl has four of thirteen chart types, all 2-D: `BarChart`, `LineChart`, `PieChart`,
+`ScatterChart`. Absent: `AreaChart`, `BubbleChart`, `RadarChart`, `StockChart`,
+`SurfaceChart`, `DoughnutChart`, `ProjectedPieChart`, every 3-D variant, `View3D`,
+`DataLabel`, `Trendline`, `UpDownBars`, `Marker`, `Layout`, `ChartSpace`, `PlotArea`,
+`DataTable`, `Title`/`Text`/`RichText`, `GraphicalProperties`, and the chart reader.
+
+**Effect.** A user can build a bar, line, pie or scatter chart with axes, a legend, solid
+series colours and one error-bar type. They cannot add a data label, a trendline, a
+title's rich text, a manual layout, a 3-D view, or any other chart type.
+
+### `cell/rich_text.py` and `cell/text.py`
+
+`CellRichText`, `TextBlock`, `Text`, `RichText`, `InlineFont`, `PhoneticText`,
+`PhoneticProperties`. ferroxl's string-table reader concatenates inline runs and discards
+their formatting, which is what openpyxl does when `rich_text=False`.
+
+**Effect.** Formatted text inside a cell cannot be written or read, which also means
+openpyxl 3.x's `load_workbook(rich_text=True)` has no counterpart. See the `load_workbook`
+table in [`reader`](#reader--openpyxlreader).
+
+### `worksheet/cell_range.py`
+
+`CellRange` and `MultiCellRange`: a rectangular range as a value, with set operations
+(`intersection`, `union`, `issubset`, `issuperset`, `isdisjoint`), `shift`, `expand`,
+`shrink`, `size`, and `rows`/`cols`/`cells`. ferroxl has `RangeBounds`, which is the
+geometry without the algebra.
+
+**Effect.** This is the root of [item 2](#2-worksheet-range-with-offsets-rows-and-columns)
+and of `openpyxl/worksheet/print_settings.py`'s `PrintArea`/`PrintTitles`.
+
+### `worksheet/` remainder
+
+| Module | What a user cannot do |
+| --- | --- |
+| `table.py` | Create or read an Excel table (ListObject) with `TableStyleInfo` |
+| `views.py` | Model `SheetView`, `Pane`, `Selection` — freeze panes are a pair of fields, not an object |
+| `filters.py` | `CustomFilter`, `Top10`, `DynamicFilter`, `DateGroupItem`, `ColorFilter`, `IconFilter`, `Filters`, `SortState`. Only `AutoFilter`, `FilterColumn` and `SortCondition` are ported |
+| `errors.py` | `IgnoredError` / `IgnoredErrors` / `ExtensionList` |
+| `ole.py` | Embedded OLE objects |
+| `smart_tag.py` | Cell and document smart tags |
+| `scenario.py` | What-if scenarios and their input cells |
+| `print_settings.py` | `PrintArea`, `PrintTitles`, `ColRange`, `RowRange` as parseable values |
+| `pagebreak.py` | `Break`/`RowBreak`/`ColBreak` with `min`/`max`/`man`/`pt` — ferroxl has `Vec<u32>` and no span data |
+| `properties.py` | `WorksheetProperties`, `Outline`, `PageSetupProperties`; `<sheetPr>` is emitted from hard-coded literals |
+| `cell_watch.py`, `controls.py`, `custom.py` | Cell watches, form controls, custom sheet properties |
+| `formula.py` | `ArrayFormula` and `DataTableFormula` |
+| `hyperlink.py`, `merge.py`, `ole.py` | The XML element types; ferroxl stores the same information as cell fields |
+
+### `workbook/` remainder
+
+| Module | What a user cannot do |
+| --- | --- |
+| `properties.py::CalcProperties` | Set calculation mode, `fullCalcOnLoad`, `forceFullCalc`, `iterate`. `<calcPr>` is written from fixed literals — 13 fields unreachable |
+| `properties.py::WorkbookProperties` | 17 of 19 fields unreachable |
+| `views.py::CustomWorkbookView` | Per-user custom workbook views |
+| `protection.py::FileSharing` | `readOnlyRecommended`, `reservationPassword` |
+| `external_link/` | Read or write any `externalLink` part — 8 classes plus `read_external_link`. This is why `keep_links` has no counterpart |
+| `web.py`, `smart_tags.py`, `function_group.py` | Web publishing, smart tags, function groups |
+| `defined_name.py` | `workbook/defined_name.py` is a *different* type from the `namedrange.py` one ferroxl ports. `comment`, `description`, `help`, `statusBar`, `hidden`, `function` and nine more are unreachable, as is `RESERVED` / `_xlnm.` handling |
+
+### `styles/` remainder
+
+| Module | What a user cannot do |
+| --- | --- |
+| `named_styles.py`, `builtins.py` | `cell.style = "Good"` — the 50 built-in named styles and `NamedStyle` itself. ferroxl writes one hard-coded `Normal` `cellStyle` and does not read `<cellStyles>` |
+| `fills.py::GradientFill` | Define a gradient fill. Worse, the reader **discards** `<gradientFill>` elements — silent loss on round trip |
+| `cell_style.py` | `StyleArray`; `<cellStyleXfs>` is not read at all, and `xfId`, `quotePrefix`, `pivotButton` and `applyNumberFormat` are not read from `<cellXfs>` |
+| `proxy.py::StyleProxy` | The read-only style proxy that makes `cell.font` non-assignable |
+| `table.py` | Custom table styles |
+| `differential.py` | `dxf` cannot change number format, alignment or protection — only font, fill and border |
+| `fonts.py` | `Font.charset`, `family`, `scheme`, `outline`, `shadow`, `condense`, `extend` are not modelled, and the reader drops them |
+| `alignment.py` | `relativeIndent`, `justifyLastLine`, `readingOrder` |
+| `colors.py` | `RgbColor`; `<colors>`/`<indexedColors>` is read but never written |
+| `numbers.py` | Built-in format ids 48 (`##0.0E+0`) and 49 (`@`) are missing, so `is_builtin("@")` is false |
+
+### `utils/` remainder
+
+`FORMULAE` (≈370 built-in function names), `escape`/`unescape`, `IndexedList`,
+`BoundDictionary`, `dataframe_to_rows`, and the open-ended range forms `"A:A"`, `"1:5"`,
+`"A1:"` — `get_range_boundaries` rejects all three even though openpyxl accepts them.
+`cols_from_range`, `coordinate_to_tuple`, `range_to_tuple` and `quote_sheetname` have no
+reusable form. `cast_numeric`/`cast_percentage`/`cast_time` exist as `Cell` methods rather
+than free functions.
 
 ## Not ported
 
@@ -418,5 +611,19 @@ and `set_header_footer` bugs were found this way, not by unit tests.
 ferroxl's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
-The suite is 481 tests — 369 in the library, 110 in the MCP server, two doctests — and
-`cargo build`, `cargo clippy` and `cargo fmt --check` are all clean.
+The suite is 532 tests - 412 in the library, 116 in the MCP server, 4 doctests - and
+`cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check` and
+`RUSTDOCFLAGS=-D warnings cargo doc` are all clean.
+
+### What this audit can and cannot see
+
+`tools/parity.py` matches names, not behaviour. It lowercases and drops underscores, so
+`iter_rows` and `iterRows` both count as matched against a Python `iter_rows`. It therefore
+cannot see a function that exists but behaves differently, a struct that is missing half its
+fields, or an XML element that is read but silently dropped. Every field-level loss listed
+above — `Font.family`, `cfvo/@gte`, `GradientFill`, `<colors>`, `<cellStyleXfs>` — is
+invisible to it and was found by reading both trees, not by running the tool.
+
+The converse also holds: a name can match while the feature behind it is absent. The tool
+counts those as matched, so the module figures in [Summary](#summary) are an upper bound on
+what works rather than a measurement of it.

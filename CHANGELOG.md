@@ -5,6 +5,57 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-10-02
+
+The first release measured against openpyxl 3.1.5 rather than the 1.9-era surface the
+project originally claimed, and the accounting corrected accordingly.
+
+### Added
+
+- **`formula::Translator`** — openpyxl's `formula.translate.Translator`. Translates a formula from
+  the cell it was written for to the cell it is going to, which is the operation behind
+  copy-paste, fill-right and fill-down. It takes an origin and a destination rather than
+  raw deltas, and it translates whole-row (`3:4`) and whole-column (`A:BC`) references,
+  which `shift_references` steps over because it looks for `$A$1`-shaped tokens — leaving
+  `=SUM(3:4)` unchanged across a copy that should have made it `=SUM(13:14)`.
+- **`TranslatorError`**, raised when a translation would push a relative reference off the
+  grid. Excel reports that as `#REF!`; clamping would keep the formula loadable while
+  quietly meaning something else.
+- **`Worksheet::iter_rows`** and **`iter_cols`** — row-major and column-major walks over the
+  used range, with `iter_rows_within` / `iter_cols_within` for explicit inclusive bounds.
+  `ws.iter_rows()` is what most openpyxl code calls first, and ferroxl had only an
+  unordered `cells()`.
+
+### Fixed
+
+- An anchored reference in a whole-row or whole-column range was being shifted anyway, so
+  `=SUM($A:$B)` came out as `=SUM($C:$D)`. The dollar sign is the entire mechanism, so the
+  check has to happen before the arithmetic rather than after.
+
+### Changed
+
+- **`PARITY.md` is now measured against openpyxl 3.1.5.** Every claim that the project was a
+  port of 1.9.0 was wrong: the reference tree is 3.1.5, and the previous document's
+  "272 public names, 77 unmatched" was an artefact of an older checkout. Against the real
+  tree it is **994 top-level names, 741 unmatched, and 31 of 183 modules fully matched**.
+- Six whole upstream packages that `PARITY.md` never mentioned are now documented: `pivot`
+  (58 classes), `chartsheet` (11), `descriptors` (49 names), `packaging` (34),
+  `cell/rich_text.py` and `worksheet/cell_range.py`.
+- `load_workbook` is now compared against 3.1.5's six parameters. Three are implemented;
+  three are not (`read_only`, `keep_links`, `rich_text`). ferroxl's `guess_types` has no
+  upstream counterpart — openpyxl removed it in 3.0 — so it is kept as a useful extra rather
+  than claimed as parity.
+- `tools/parity.py` documents 3.1.5, and `PARITY.md` states what the audit cannot see: it
+  matches names, so a function that behaves wrongly and an XML element that is silently
+  dropped both read as matched.
+
+### Not ported
+
+Named styles, gradient fills, rich text, pivot tables, chart-only sheets, Excel tables,
+the `descriptors` layer, and nine of thirteen chart types are documented as absent rather
+than implied present. Two of them — pivot tables and chart sheets — are also *lossy on a
+round trip*: saving a loaded workbook discards those parts.
+
 ## [0.1.2] — 2026-10-02
 
 Cell dependency tracing, and a streaming writer that does not need the whole sheet in
@@ -71,7 +122,7 @@ or the round-trip model, and are scheduled against the major versions.
 
 ## [0.1.0] — 2026-10-02
 
-The first release. ferroxl is a Rust port of openpyxl 1.9.0: the same modules, the same
+The first release. ferroxl is a Rust port of openpyxl 3.1.5: the same modules, the same
 classes, the same behaviour, including the parts that are surprising.
 
 ### Added
@@ -128,7 +179,7 @@ and a path that escapes it is refused.
 - **The 1900 leap-year bug is reproduced, not fixed.** Serial 60 is the phantom
   1900-02-29. `to_excel` skips it and `from_excel` does not, so the two disagree by one
   below it, exactly as openpyxl's do.
-- **Charts and images are written but not read back.** openpyxl 1.9 writes the parts and
+- **Charts and images are written but not read back.** openpyxl 3.1.5 writes the parts and
   its reader does not parse them; ferroxl matches that rather than being half-compatible
   in a different direction.
 - **`COLOR_INDEX` has 56 entries**, not the 64 the Excel documentation mentions, because

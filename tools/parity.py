@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Audit ferroxl against the openpyxl 1.9.0 source tree, module by module.
+"""Audit ferroxl against the openpyxl 3.1.5 source tree, module by module.
 
 This is what PARITY.md is written from. Point it at a checkout of the Python original and
 it reports, for every module, which of openpyxl's public names have a ferroxl counterpart.
