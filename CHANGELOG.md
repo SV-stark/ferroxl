@@ -7,7 +7,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The parity CI job could never have passed.** Two faults, both in the harness plumbing and
+  neither in the library. `find_binary()` looked for the server one level *above* the
+  workspace instead of in cargo's own `target/`, so it resolved only on a machine exporting
+  `CARGO_TARGET_DIR`; and the step that fetches openpyxl cloned `github.com/theorchard/openpyxl`,
+  which does not exist. openpyxl 3.x is hosted on Heptapod, whose anonymous git-over-https is
+  refused, and the GitHub mirror is stuck at 1.9.0 with no 3.x tags — so the pin is now an
+  archive at tag 3.1.5, verified byte-identical to a checkout. The step also asserts the
+  fixture it depends on is present before running, because an empty corpus would have made
+  `corpus.py` report a clean run on nothing.
+- `find_binary()` now warns when the binary is older than the sources under `crates/`. A
+  harness that locates a stale build reports the previous build's behaviour and calls it a
+  pass, which is the failure mode this whole change set exists to prevent.
+- The openpyxl links in `README.md` and `PARITY.md` pointed at a repository that 404s.
+
+Nothing in this section affects the published crates: `tools/`, the repository README,
+`PARITY.md` and `.github/` are not part of either package, so 0.1.8 is unaffected.
 
 ## [0.1.8] — 2026-10-05
 

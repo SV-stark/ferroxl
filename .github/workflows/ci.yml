@@ -119,12 +119,24 @@ jobs:
       - name: The tools survive being used twice
         run: python tools/mcp_limits.py
 
-      # Neither openpyxl's tests nor its fixtures ship in the wheel, so a checkout is
-      # needed. Pinned to the tag PARITY.md was measured against: a moving reference turns a
-      # green build red for reasons that have nothing to do with the commit under test.
-      - name: Clone openpyxl at the pinned reference
+      # Neither openpyxl's tests nor its fixtures ship in the wheel or the sdist, so the
+      # source tree is needed. Fetched as an archive at the pinned tag rather than cloned:
+      # openpyxl 3.x lives on Heptapod, whose anonymous git-over-https is refused, and the
+      # GitHub mirror is stuck at 1.9.0 with no 3.x tags at all. The archive extracts to a
+      # directory containing openpyxl/, which is the layout these harnesses expect.
+      # Pinned by tag because a moving reference turns a green build red for reasons that
+      # have nothing to do with the commit under test.
+      - name: Fetch openpyxl at the pinned reference
         run: |
-          git clone --depth 1 --branch 3.1.5 https://github.com/theorchard/openpyxl ../openpyxl
+          curl --fail --silent --show-error --location \
+            --output openpyxl.tar.gz \
+            https://foss.heptapod.net/openpyxl/openpyxl/-/archive/3.1.5/openpyxl-3.1.5.tar.gz
+          mkdir -p ../openpyxl
+          tar -xzf openpyxl.tar.gz --strip-components=1 -C ../openpyxl
+          # Fail here rather than four steps later with a confusing error: the harnesses need
+          # these, and an empty fixture set would make corpus.py report a clean run on
+          # nothing at all.
+          test -f ../openpyxl/openpyxl/tests/data/genuine/mac_date.xlsx
           echo "OPENPYXL_CHECKOUT=$GITHUB_WORKSPACE/../openpyxl" >> "$GITHUB_ENV"
 
       # openpyxl's own test suite, run against ferroxl as the implementation. See

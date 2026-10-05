@@ -1,6 +1,6 @@
 # Feature parity with openpyxl 3.1.5
 
-ferroxl is a port of [openpyxl](https://github.com/theorchard/openpyxl) 3.1.5. This document
+ferroxl is a port of [openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) 3.1.5. This document
 records, module by module, what has been implemented, what has not, and where the Rust
 version deliberately behaves differently.
 

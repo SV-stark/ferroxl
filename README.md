@@ -4,7 +4,7 @@ A Rust library for reading and writing Excel 2007 `.xlsx`/`.xlsm` files, plus a
 [Model Context Protocol](https://modelcontextprotocol.io) server that exposes it to AI
 agents.
 
-ferroxl is a feature-parity port of [openpyxl](https://github.com/theorchard/openpyxl)
+ferroxl is a feature-parity port of [openpyxl](https://foss.heptapod.net/openpyxl/openpyxl)
 3.1.5. It follows the Python package's module layout, class names and semantics, so a
 change can be traced back to the Python it mirrors. Where Python's behaviour cannot be
 reproduced in Rust — hash-based equality, tri-state booleans, PIL-backed images — the
@@ -533,9 +533,15 @@ test files, about 1,700 test functions, and a set of real workbooks from Excel, 
 Mac Excel:
 
 ```console
-$ git clone --depth 1 --branch 3.1.5 https://github.com/theorchard/openpyxl ../openpyxl
+$ curl --fail --location --output openpyxl.tar.gz \
+      https://foss.heptapod.net/openpyxl/openpyxl/-/archive/3.1.5/openpyxl-3.1.5.tar.gz
+$ mkdir -p ../openpyxl && tar -xzf openpyxl.tar.gz --strip-components=1 -C ../openpyxl
 $ python tools/upstream/run.py ../openpyxl
 ```
+
+An archive, not a clone, and not by preference: openpyxl 3.x is hosted on Heptapod, which
+refuses anonymous git-over-https, and the GitHub mirror stops at 1.9.0 with no 3.x tags. See
+[tools/upstream/README.md](tools/upstream/README.md) for the details.
 
 `corpus.py` reads every real workbook with both implementations and compares them cell by
 cell, with openpyxl as the oracle. `manifest.py` maps all 161 test files onto ferroxl modules,

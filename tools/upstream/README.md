@@ -7,18 +7,30 @@ to make this look covered when it is not.
 
 What is possible is three other things, and this directory does all three.
 
-## Why a checkout is needed
+## Where the source tree comes from
 
-Neither the tests nor the fixtures ship in the wheel — `pip install openpyxl` gives you the
-library and neither of those. So these harnesses need a source checkout, pinned:
+Neither the tests nor the fixtures ship in the wheel *or* the sdist — `pip install openpyxl`
+gives you the library and neither of those. So these harnesses need the source tree, pinned to
+the tag `PARITY.md`'s figures were measured against.
 
 ```console
-$ git clone --depth 1 --branch 3.1.5 https://github.com/theorchard/openpyxl ../openpyxl
+$ curl --fail --location --output openpyxl.tar.gz \
+      https://foss.heptapod.net/openpyxl/openpyxl/-/archive/3.1.5/openpyxl-3.1.5.tar.gz
+$ mkdir -p ../openpyxl
+$ tar -xzf openpyxl.tar.gz --strip-components=1 -C ../openpyxl
 $ python tools/upstream/run.py ../openpyxl
 ```
 
-The same requirement `tools/parity.py` already has, and for the same reason: the pinned tag
-is the release `PARITY.md`'s figures were measured against.
+An archive rather than a clone, and that is not a preference. openpyxl 3.x is hosted on
+Heptapod, which refuses anonymous git-over-https (`Gitlab::GitAccess::NotFoundError`); the
+GitHub mirror is stuck at 1.9.0 and has no 3.x tags at all; and Bitbucket, which the 3.x
+project files still reference, is gone. `git clone --branch 3.1.5` cannot succeed against any
+of them. The archive is verified byte-identical to a 3.1.5 checkout, fixtures and all, and it
+extracts to a directory containing `openpyxl/`, which is what these tools expect.
+
+CI does exactly the above, then asserts the fixture it depends on is actually present before
+running anything — an empty corpus would otherwise make `corpus.py` report a clean run on
+nothing at all.
 
 ## What each tool does
 
