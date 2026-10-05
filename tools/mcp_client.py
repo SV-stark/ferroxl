@@ -15,16 +15,47 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def find_binary() -> Path:
-    """Locate the built server, honouring CARGO_TARGET_DIR the way cargo does."""
-    target = Path(os.environ.get("CARGO_TARGET_DIR") or (ROOT.parent / "target"))
+    """Locate the built server, honouring CARGO_TARGET_DIR the way cargo does.
+
+    The fallback is cargo's own default -- `<workspace root>/target` -- and deliberately not
+    somewhere outside the repo. A previous version looked one level *above* the workspace,
+    which happened to work on one machine that exported CARGO_TARGET_DIR and failed
+    everywhere else, including CI: the binary was never found, and a harness that silently
+    passes against a stale copy of the binary is worse than no harness.
+    """
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or (ROOT / "target"))
     name = "ferroxl-mcp.exe" if os.name == "nt" else "ferroxl-mcp"
     for profile in ("debug", "release"):
         candidate = target / profile / name
         if candidate.is_file():
+            warn_if_stale(candidate)
             return candidate
     raise SystemExit(
-        f"ferroxl-mcp not built under {target}; run `cargo build -p ferroxl-mcp` first"
+        f"ferroxl-mcp not built under {target}; run `cargo build -p ferroxl-mcp` first.\n"
+        f"If the build output is somewhere else, set CARGO_TARGET_DIR to point at it."
     )
+
+
+def warn_if_stale(binary: Path) -> None:
+    """Say so if the server binary is older than the sources it is meant to be built from.
+
+    A harness that quietly tests a stale binary reports the *old* behaviour and calls it a
+    pass, which is worse than not testing: the 1904 date-system fix was verified against a
+    freshly built binary by hand, and a stale one would have reported the bug still present
+    at best, and passed on the day it happened to be right at worst. Not fatal, because
+    checkout and clock skew can move timestamps either way, but loud.
+    """
+    built = binary.stat().st_mtime
+    newest = max(
+        (path.stat().st_mtime for path in (ROOT / "crates").rglob("*.rs")),
+        default=0.0,
+    )
+    if newest > built:
+        print(
+            f"warning: {binary} is older than the newest source under crates/.\n"
+            f"         Rebuild, or the results below describe a server that is not this commit.",
+            file=sys.stderr,
+        )
 
 
 class Server:
