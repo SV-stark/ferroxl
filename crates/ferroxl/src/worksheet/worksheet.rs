@@ -292,10 +292,13 @@ impl Worksheet {
     }
 
     /// Read a cell's value, converting date-formatted numerics back into date types.
+    ///
+    /// The workbook's date system decides what a serial means, so a 1904 workbook is
+    /// converted against the 1904 epoch rather than the 1900 default.
     pub fn cell_value(&self, coordinate: &str) -> Option<CellValue> {
         let cell = self.cells.get(coordinate)?;
         let format = self.styles.get(coordinate).map(|s| s.number_format_code());
-        Some(cell.display_value(format))
+        Some(cell.display_value_in(format, self.context.base_date))
     }
 
     /// Set a cell's value from a display value such as a string or number.
@@ -763,6 +766,12 @@ impl Worksheet {
     }
 
     /// Merge a range, blanking every cell but the top-left one.
+    ///
+    /// The corners must be in order. `merge_cells("C3:A1")` is refused rather than
+    /// normalised, because `<mergeCell ref="C3:A1"/>` is not a range Excel or openpyxl can
+    /// read: openpyxl raises `1 must be greater than 3` while loading, so accepting one
+    /// writes a file that has already broken. openpyxl's `merge_cells` refuses it at the
+    /// call site for the same reason.
     pub fn merge_cells(&mut self, range_string: &str) -> Result<()> {
         let parts: Vec<&str> = range_string.split(':').collect();
         if parts.len() != 2 {
@@ -772,6 +781,14 @@ impl Worksheet {
         }
         let range_string = range_string.replace('$', "");
         let bounds = self.range_bounds(&range_string)?;
+        // `RangeBounds` comes from the range string with an exclusive `max_col`, so a
+        // backwards range arrives here as `min_col > max_col` and would otherwise loop over
+        // an empty span while still being recorded as merged.
+        if bounds.min_col > bounds.max_col || bounds.min_row > bounds.max_row {
+            return Err(Error::InsufficientCoordinates(format!(
+                "{range_string} runs backwards; the top-left corner comes first, as in A1:C3"
+            )));
+        }
         for row in bounds.min_row..=bounds.max_row {
             // `max_col` is an exclusive bound, so `A1:D1` covers columns 1 through 4.
             for column in bounds.min_col..bounds.max_col {
@@ -1363,6 +1380,30 @@ mod tests {
             ws.get_cell("E6").is_none(),
             "unmerging must not create E6 either"
         );
+    }
+
+    /// `<mergeCell ref="C3:A1"/>` is not a range openpyxl can read -- it raises
+    /// `1 must be greater than 3` while loading -- so accepting one writes a file that has
+    /// already broken, and the tool that wrote it reports success.
+    #[test]
+    fn a_merge_whose_corners_are_backwards_is_refused() {
+        let mut ws = sheet();
+        let error = ws.merge_cells("C3:A1").unwrap_err();
+        assert!(error.to_string().contains("backwards"), "{error}");
+        assert!(
+            ws.merged_cells.is_empty(),
+            "a refused merge must not be recorded: {:?}",
+            ws.merged_cells
+        );
+        assert!(ws.get_cell("A1").is_none_or(|cell| !cell.merged));
+
+        // The row corner is checked too, not just the column one.
+        assert!(ws.merge_cells("A3:C1").is_err());
+        // And the in-order spellings still work, including a single cell.
+        ws.merge_cells("A1:C3").unwrap();
+        assert_eq!(ws.merged_cells, vec!["A1:C3".to_string()]);
+        ws.merge_cells("B2:B2").unwrap();
+        assert!(ws.merged_cells.contains(&"B2:B2".to_string()));
     }
 
     #[test]

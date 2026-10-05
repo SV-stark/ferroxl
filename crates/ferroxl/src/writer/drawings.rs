@@ -149,16 +149,11 @@ fn write_image(
             ("name", &format!("Picture {index}")),
         ],
     ));
-    let mut locks = Element::with_attributes(
-        format!("{{{SHEET_DRAWING_NS}}}cNvPicPr"),
-        [
-            ("noChangeAspect", if no_change_aspect { "1" } else { "0" }),
-            (
-                "noChangeArrowheads",
-                if no_change_arrowheads { "1" } else { "0" },
-            ),
-        ],
-    );
+    // `cNvPicPr` carries `preferRelativeResize` and nothing else; `noChangeAspect` and
+    // `noChangeArrowheads` belong on the `a:picLocks` child. Putting them on both is
+    // harmless to Excel but makes openpyxl's `NonVisualPictureProperties.from_tree` raise a
+    // TypeError, and a reader that raises drops every image in the drawing.
+    let mut locks = Element::new(format!("{{{SHEET_DRAWING_NS}}}cNvPicPr"));
     locks.append(Element::with_attributes(
         format!("{{{DRAWING_NS}}}picLocks"),
         [
@@ -464,6 +459,41 @@ mod tests {
         );
         assert!(xml.contains("blipFill"));
         assert!(xml.contains("noChangeAspect=\"1\""));
+    }
+
+    /// openpyxl's `NonVisualPictureProperties` accepts only `preferRelativeResize`, so a
+    /// `cNvPicPr` carrying `noChangeAspect` makes its reader raise a `TypeError` -- and a
+    /// reader that raises drops every image in the drawing. The attributes belong on the
+    /// `a:picLocks` child.
+    #[test]
+    fn the_picture_lock_attributes_are_on_pic_locks_not_cnvpicpr() {
+        let mut sheet = Worksheet::new("Sheet1").unwrap();
+        sheet.add_image(crate::drawing::Image::new(vec![], "png", (100, 50)));
+        let xml = write_drawing(&sheet);
+        let root = fromstring(xml.as_bytes()).unwrap();
+
+        // `find` matches direct children, and `pic` sits inside the anchor, so each level of the
+        // path down to `cNvPicPr` is walked explicitly.
+        let anchor = &root.find_all(format!("{{{SHEET_DRAWING_NS}}}absoluteAnchor"))[0];
+        let picture = anchor
+            .find(format!("{{{SHEET_DRAWING_NS}}}pic"))
+            .expect("the anchor must contain a picture");
+        let non_visual = picture
+            .find(format!("{{{SHEET_DRAWING_NS}}}nvPicPr"))
+            .expect("nvPicPr");
+        let properties = non_visual
+            .find(format!("{{{SHEET_DRAWING_NS}}}cNvPicPr"))
+            .expect("cNvPicPr");
+        assert!(
+            properties.attributes.is_empty(),
+            "cNvPicPr must carry no attributes openpyxl does not accept, found {:?}",
+            properties.attributes
+        );
+        let locks = properties
+            .find(format!("{{{DRAWING_NS}}}picLocks"))
+            .expect("the lock attributes must still be written, on picLocks");
+        assert_eq!(locks.get("noChangeAspect"), Some("1"));
+        assert_eq!(locks.get("noChangeArrowheads"), Some("1"));
     }
 
     #[test]

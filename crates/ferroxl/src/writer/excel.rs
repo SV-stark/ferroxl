@@ -82,6 +82,7 @@ impl ExcelWriter {
         for sheet in &mut workbook.worksheets {
             sheet.garbage_collect();
         }
+        collect_differential_styles(&mut workbook);
         let string_table = create_string_table(&workbook.worksheets);
         let style_tables = build_style_tables(&workbook);
         ExcelWriter {
@@ -458,6 +459,40 @@ fn copy_vba_archive(archive: &mut ZipWriter<Cursor<Vec<u8>>>, vba: &[u8]) -> Res
     Ok(())
 }
 
+/// Move every conditional format's differential style into the workbook's `<dxfs>` list.
+///
+/// A `dxf` lives on the rule while it is being built and belongs in `styles.xml` once the
+/// package is assembled, with the rule left pointing at it by index. Nothing else performs
+/// that move, so a rule carrying a font colour, fill or bold on a match would otherwise be
+/// written with an empty `<dxfs>` — the rule would match and highlight nothing, which looks
+/// like a rule that silently does nothing.
+///
+/// Runs before the style tables are built because both halves depend on it: the worksheets
+/// need the assigned `dxfId`, and `styles.xml` needs the collected styles.
+fn collect_differential_styles(workbook: &mut Workbook) {
+    // A loaded workbook already has its `<dxfs>`; new rules append to that list, which is
+    // what keeps the loaded styles' indices valid.
+    let mut collected = workbook
+        .style_properties
+        .as_ref()
+        .map(|properties| properties.dxf_list.clone())
+        .unwrap_or_default();
+    let before = collected.len();
+    for sheet in &mut workbook.worksheets {
+        sheet
+            .conditional_formatting
+            .collect_dxf_styles(&mut collected);
+    }
+    if collected.len() == before {
+        // Nothing new, so leave the workbook exactly as it was read.
+        return;
+    }
+    let properties = workbook
+        .style_properties
+        .get_or_insert_with(Default::default);
+    properties.dxf_list = collected;
+}
+
 /// Save a workbook to a file path.
 pub fn save_workbook(workbook: Workbook, path: impl AsRef<std::path::Path>) -> Result<()> {
     let bytes = save_virtual_workbook(workbook)?;
@@ -506,6 +541,7 @@ mod tests {
     use super::*;
     use crate::cell::CellValue;
     use crate::charts::BarChart;
+    use crate::formatting::rules::CellIsRule;
     use crate::styles::style::Style;
     use zip::ZipArchive;
 
@@ -538,6 +574,76 @@ mod tests {
         workbook.worksheets[0].set("B1", 42.0).unwrap();
         workbook.worksheets[1].set("A1", 1.0).unwrap();
         workbook
+    }
+
+    /// A `dxf` lives on the rule while it is built and belongs in `<dxfs>` once the package
+    /// is assembled. Nothing else performs that move, so without it a conditional format's
+    /// font colour, fill and bold are written nowhere and the rule highlights nothing.
+    #[test]
+    fn a_conditional_formats_differential_style_reaches_the_stylesheet() {
+        let mut workbook = Workbook::new();
+        let mut font = crate::styles::Font::new();
+        font.bold = true;
+        let rule = CellIsRule::new(Some("greaterThan"), Some("5"), false)
+            .to_rule()
+            .with_dxf(crate::formatting::DxfStyle {
+                font: Some(font),
+                border: None,
+                fill: None,
+            });
+        workbook.worksheets[0]
+            .conditional_formatting
+            .add("B1:B3", rule);
+
+        let bytes = save_virtual_workbook(workbook).unwrap();
+        let styles = part_contents(&bytes, "xl/styles.xml");
+        assert!(
+            styles.contains("<dxfs count=\"1\">"),
+            "the dxf was not collected: {styles}"
+        );
+        assert!(
+            styles.contains("<dxf>"),
+            "the dxf's contents must be written, not just counted: {styles}"
+        );
+        let sheet = part_contents(&bytes, "xl/worksheets/sheet1.xml");
+        assert!(
+            sheet.contains("dxfId=\"0\""),
+            "the sheet's rule must point at the collected dxf: {sheet}"
+        );
+    }
+
+    /// A loaded workbook's `<dxfs>` are already-indexed, so a new rule has to append to
+    /// that list rather than replace it -- otherwise every loaded differential style ends up
+    /// pointing at the wrong index.
+    #[test]
+    fn a_new_rule_appends_to_a_loaded_dxf_list() {
+        let mut workbook = Workbook::new();
+        let loaded = crate::formatting::DxfStyle::default();
+        workbook.style_properties = Some(crate::formatting::StyleProperties {
+            color_index: Vec::new(),
+            dxf_list: vec![loaded],
+        });
+        let rule = CellIsRule::new(Some("greaterThan"), Some("5"), false)
+            .to_rule()
+            .with_dxf(crate::formatting::DxfStyle {
+                font: Some(crate::styles::Font::new()),
+                border: None,
+                fill: None,
+            });
+        workbook.worksheets[0]
+            .conditional_formatting
+            .add("B1:B3", rule);
+
+        let bytes = save_virtual_workbook(workbook).unwrap();
+        let styles = part_contents(&bytes, "xl/styles.xml");
+        assert!(
+            styles.contains("<dxfs count=\"2\">"),
+            "the loaded dxf was replaced rather than kept: {styles}"
+        );
+        assert!(
+            part_contents(&bytes, "xl/worksheets/sheet1.xml").contains("dxfId=\"1\""),
+            "the new rule must take the index after the loaded one"
+        );
     }
 
     #[test]

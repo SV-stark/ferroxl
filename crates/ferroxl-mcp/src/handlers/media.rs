@@ -26,9 +26,17 @@ pub fn add_chart(workspace: &Workspace, args: &Args) -> Handled {
     let sheet_name = workbook.worksheets[index].title().to_string();
     let (column, row) = ferroxl::coordinate_from_string(&anchor).map_err(err)?;
 
+    let categories = args.opt_str("categories");
+    let scatter = kind == "scatter";
     let mut series = Vec::new();
     for (position, entry) in series_spec.iter().enumerate() {
-        series.push(build_series(entry, &sheet_name, position, args)?);
+        series.push(build_series(
+            entry,
+            &sheet_name,
+            position,
+            categories.as_deref(),
+            scatter,
+        )?);
     }
 
     let mut chart = match kind.as_str() {
@@ -76,6 +84,7 @@ pub fn add_chart(workspace: &Workspace, args: &Args) -> Handled {
             "column": column,
             "row": row,
             "series": count + 1,
+            "categories": categories,
             "width_cm": width_cm,
             "height_cm": height_cm,
         }),
@@ -94,37 +103,81 @@ fn cm_to_pixels(centimetres: f64) -> i64 {
 }
 
 /// Build one series from its JSON description.
+///
+/// `values` is the series' own numbers. `xvalues` is the horizontal numbers a scatter plot
+/// needs, and `categories` is the axis labels every other type uses; both default to the
+/// tool's `categories` argument, so a caller who set it once gets it on every series.
 fn build_series(
     entry: &Value,
     sheet_name: &str,
     position: usize,
-    args: &Args,
+    categories: Option<&str>,
+    scatter: bool,
 ) -> Result<Series, String> {
     let values = entry
         .get("values")
         .and_then(Value::as_str)
         .ok_or_else(|| format!("series {position} needs a values range"))?;
-    let values_range = sheet_range(values)?;
+    let (pos1, pos2) = sheet_range(values)?;
+
     // A scatter plot puts numbers on both axes, so the values are forced to numeric. For
     // the other types ferroxl infers the type from the cells themselves.
-    let data_type = if args.opt_str("type").as_deref() == Some("scatter") {
+    let data_type = if scatter {
         Some(ReferenceDataType::Numeric)
     } else {
         None
     };
     let mut series =
-        Series::new(Reference::new(sheet_name, values_range, None, data_type, None).map_err(err)?);
+        Series::new(Reference::new(sheet_name, pos1, pos2, data_type, None).map_err(err)?);
     if let Some(name) = entry.get("name").and_then(Value::as_str) {
         series = series.with_title(name.to_string());
+    }
+
+    // The x values come from the series itself when it names them, because only a scatter
+    // plot needs different x values per series.
+    if let Some(xvalues) = entry.get("xvalues").and_then(Value::as_str) {
+        let (x1, x2) = sheet_range(xvalues)?;
+        series = series.with_xvalues(
+            Reference::new(sheet_name, x1, x2, Some(ReferenceDataType::Numeric), None)
+                .map_err(err)?,
+        );
+    } else if scatter {
+        if let Some(range) = categories {
+            let (x1, x2) = sheet_range(range)?;
+            series = series.with_xvalues(
+                Reference::new(sheet_name, x1, x2, Some(ReferenceDataType::Numeric), None)
+                    .map_err(err)?,
+            );
+        }
+    }
+    // A scatter plot's x values are its categories too, and writing both would give the
+    // axis the same numbers twice.
+    if !scatter {
+        if let Some(range) = categories {
+            let (c1, c2) = sheet_range(range)?;
+            series = series.with_labels(
+                Reference::new(sheet_name, c1, c2, Some(ReferenceDataType::String), None)
+                    .map_err(err)?,
+            );
+        }
     }
     Ok(series)
 }
 
-/// Turn an A1 range into the `(first column, point count)` pair `Reference` wants.
+/// The 0-based `(row, column)` corners of a range: the top-left cell, and the bottom-right
+/// cell as `None` when the range is a single cell.
+type RangeCorners = ((usize, usize), Option<(usize, usize)>);
+
+/// Turn an A1 range into the 0-based `(row, column)` corners `Reference` wants.
 ///
 /// The range may carry its own sheet name and absolute markers; both are stripped, because
 /// the sheet is passed separately to `Reference::new`.
-fn sheet_range(range: &str) -> Result<(usize, usize), String> {
+///
+/// `Reference` takes `(row, column)`, not `(column, row)`, and a multi-cell range needs both
+/// corners -- passing one corner, or the two in the other order, produces a reference to a
+/// single unrelated cell, which is exactly the kind of thing that still writes a
+/// well-formed chart.
+fn sheet_range(range: &str) -> Result<RangeCorners, String> {
     let trimmed = range.trim();
     let local = trimmed.strip_prefix('=').unwrap_or(trimmed);
     let local = local
@@ -132,22 +185,30 @@ fn sheet_range(range: &str) -> Result<(usize, usize), String> {
         .map(|(_, tail)| tail)
         .unwrap_or(local);
     let cleaned = local.replace('$', "");
-    if let Some((min, max)) = cleaned.split_once(':') {
-        let (start, start_row) = ferroxl::coordinate_from_string(min).map_err(err)?;
-        let (end, end_row) = ferroxl::coordinate_from_string(max).map_err(err)?;
-        let start = ferroxl::column_index_from_string(&start).map_err(err)?;
-        let end = ferroxl::column_index_from_string(&end).map_err(err)?;
-        if end < start {
+    if cleaned.contains(':') {
+        let (min, max) = cleaned
+            .split_once(':')
+            .ok_or_else(|| format!("{range:?} is not a range"))?;
+        let (min_col, min_row) = ferroxl::coordinate_from_string(min).map_err(err)?;
+        let (max_col, max_row) = ferroxl::coordinate_from_string(max).map_err(err)?;
+        let min_col = ferroxl::column_index_from_string(&min_col).map_err(err)?;
+        let max_col = ferroxl::column_index_from_string(&max_col).map_err(err)?;
+        if max_col < min_col {
             return Err(format!("{range:?} runs backwards"));
         }
-        if end_row < start_row {
+        if max_row < min_row {
             return Err(format!("{range:?} runs backwards"));
         }
-        return Ok((start as usize, (end_row - start_row + 1) as usize));
+        // `coordinate_from_string` is 1-based and `Reference` is 0-based.
+        return Ok((
+            (min_row as usize - 1, min_col as usize - 1),
+            Some((max_row as usize - 1, max_col as usize - 1)),
+        ));
     }
-    // A bare cell is a single point.
-    ferroxl::coordinate_from_string(&cleaned).map_err(err)?;
-    Ok((1, 1))
+    // A bare cell is a single point, with no second corner.
+    let (column, row) = ferroxl::coordinate_from_string(&cleaned).map_err(err)?;
+    let column = ferroxl::column_index_from_string(&column).map_err(err)?;
+    Ok(((row as usize - 1, column as usize - 1), None))
 }
 
 /// Embed an image on a sheet.
@@ -172,6 +233,12 @@ pub fn add_image(workspace: &Workspace, args: &Args) -> Handled {
     if let Some(height) = args.opt_number("height") {
         image.drawing.set_height(height as i64);
     }
+    // Anchor the picture to the cell it was asked for. Without this the drawing keeps its
+    // default `Absolute` anchor, which Excel renders but openpyxl cannot read at all: its
+    // `AbsoluteAnchor` has no `pic`, so the image is invisible to anything that goes through
+    // openpyxl. A one-cell anchor is what openpyxl itself writes.
+    let (column, row) = ferroxl::coordinate_from_string(&anchor).map_err(err)?;
+    image.anchor_one_cell(&column, row).map_err(err)?;
     let (width, height) = (image.drawing.width(), image.drawing.height());
     let count = workbook.worksheets[index].images.len();
     workbook.worksheets[index].add_image(image);
@@ -242,12 +309,32 @@ mod tests {
     use super::*;
     use crate::testing;
 
+    /// The corners are 0-based `(row, column)`, which is the order `Reference` wants --
+    /// the reverse order still compiles, and produces a reference to a cell in neither row
+    /// nor column of the range that was asked for.
     #[test]
-    fn a_range_becomes_an_offset_and_a_length() {
-        assert_eq!(sheet_range("A2:A8").unwrap(), (1, 7));
-        assert_eq!(sheet_range("B2:C4").unwrap(), (2, 3));
-        assert_eq!(sheet_range("A1").unwrap(), (1, 1));
-        assert_eq!(sheet_range("Other!$A$2:$A$9").unwrap(), (1, 8));
+    fn a_range_becomes_its_zero_based_row_column_corners() {
+        assert_eq!(sheet_range("A2:A8").unwrap(), ((1, 0), Some((7, 0))));
+        assert_eq!(sheet_range("B2:C4").unwrap(), ((1, 1), Some((3, 2))));
+        assert_eq!(sheet_range("A1").unwrap(), ((0, 0), None));
+        assert_eq!(
+            sheet_range("Other!$A$2:$A$9").unwrap(),
+            ((1, 0), Some((8, 0)))
+        );
+        // The `=Sheet!A1` spelling a chart author would paste in.
+        assert_eq!(
+            sheet_range("='Data'!$C$2:$C$4").unwrap(),
+            ((1, 2), Some((3, 2)))
+        );
+    }
+
+    /// The point the whole function exists to prevent: a range that must reach
+    /// `Reference` with both corners intact, so the written `<c:f>` is the range itself.
+    #[test]
+    fn the_corners_render_back_as_the_range_that_was_given() {
+        let (pos1, pos2) = sheet_range("B2:B3").unwrap();
+        let reference = ferroxl::charts::Reference::new("Data", pos1, pos2, None, None).unwrap();
+        assert_eq!(reference.to_reference_string(), "'Data'!$B$2:$B$3");
     }
 
     #[test]

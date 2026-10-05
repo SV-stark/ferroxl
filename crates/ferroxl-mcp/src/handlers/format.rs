@@ -409,7 +409,13 @@ fn differential_style(args: &Args) -> Result<Option<ferroxl::formatting::DxfStyl
         Some(colour) => {
             let mut fill = Fill::new();
             fill.fill_type = Some("solid".to_string());
-            fill.start_color = Color::new(check_colour("fill_color", &colour)?);
+            let colour = Color::new(check_colour("fill_color", &colour)?);
+            // Both ends carry the colour. A solid fill takes its visible colour from
+            // `fgColor`, but openpyxl reads a dxf's colour from `bgColor` too, and Excel
+            // writes both -- a fill with only `fgColor` reads back as transparent in
+            // anything that goes through openpyxl.
+            fill.start_color = colour.clone();
+            fill.end_color = colour;
             Some(fill)
         }
         None => None,

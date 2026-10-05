@@ -543,8 +543,19 @@ impl Cell {
     /// Reconstruct the display value from the stored serial.
     ///
     /// Requires the cell's number format, because only date-formatted numerics are
-    /// converted back into datetimes.
+    /// converted back into datetimes, and the workbook's date system, because the same
+    /// serial means different days in the 1900 and 1904 calendars -- a 1904 workbook read
+    /// with the 1900 epoch is out by 1462 days.
+    ///
+    /// [`display_value_in`](Self::display_value_in) takes the context; this one is the
+    /// 1900 default, kept because a caller that has no workbook in hand genuinely has no
+    /// other option.
     pub fn display_value(&self, number_format: Option<&str>) -> CellValue {
+        self.display_value_in(number_format, BaseDate::Windows1900)
+    }
+
+    /// [`display_value`](Self::display_value) against a known base date.
+    pub fn display_value_in(&self, number_format: Option<&str>, base: BaseDate) -> CellValue {
         if self.is_date(number_format) {
             // A value written as a date keeps its original Rust type, so a `Date` stays a
             // `Date` and a `DateTime` stays a `DateTime`.
@@ -555,7 +566,7 @@ impl Cell {
                 return self.original.clone();
             }
             if let CellValue::Number(serial) = self.value {
-                return match from_excel(serial, BaseDate::Windows1900) {
+                return match from_excel(serial, base) {
                     ExcelDateTime::DateTime(dt) => CellValue::DateTime(dt),
                     ExcelDateTime::Date(d) => CellValue::Date(d),
                     ExcelDateTime::Time(t) => CellValue::Time(t),
@@ -790,6 +801,55 @@ mod tests {
         let long = "x".repeat(40_000);
         assert_eq!(check_string(&long).unwrap().len(), MAX_STRING_LENGTH);
         assert_eq!(check_string("a\r\nb").unwrap(), "a\nb");
+    }
+
+    /// The same serial means different days in the 1900 and 1904 calendars -- 1462 days apart --
+    /// so a 1904 workbook read against the 1900 default epoch returns dates four years early.
+    /// Found by running `tests/data/genuine/mac_date.xlsx`, a real Mac Excel file, through
+    /// openpyxl and this library and comparing.
+    #[test]
+    fn display_value_honours_the_1904_date_system() {
+        let mut cell = Cell::new("A", 1);
+        // 41184 is 2016-10-03 counted from 1904-01-01.
+        cell.set_explicit_value(CellValue::Number(41184.0), DataType::Numeric)
+            .unwrap();
+
+        // openpyxl hands back a `datetime.datetime` for this cell, not a `date`, so the
+        // reconstruction is a `DateTime` too.
+        assert_eq!(
+            cell.display_value_in(Some("dd/mm/yyyy"), BaseDate::Mac1904),
+            CellValue::DateTime(
+                chrono::NaiveDate::from_ymd_opt(2016, 10, 3)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+            )
+        );
+        // Against the 1900 epoch the same serial is four years earlier, which is the bug.
+        assert_eq!(
+            cell.display_value_in(Some("dd/mm/yyyy"), BaseDate::Windows1900),
+            CellValue::DateTime(
+                chrono::NaiveDate::from_ymd_opt(2012, 10, 2)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+            )
+        );
+        // And the 1900-default entry point is unchanged for a 1900 workbook.
+        assert_eq!(
+            cell.display_value(Some("dd/mm/yyyy")),
+            CellValue::DateTime(
+                chrono::NaiveDate::from_ymd_opt(2012, 10, 2)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+            )
+        );
+        // A non-date format is untouched either way.
+        assert_eq!(
+            cell.display_value_in(Some("General"), BaseDate::Mac1904),
+            CellValue::Number(41184.0)
+        );
     }
 
     #[test]
