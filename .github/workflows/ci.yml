@@ -1,11 +1,17 @@
 # Continuous integration for ferroxl.
 #
-# Two things are checked, and they are checked separately because they fail for different
+# Three things are checked, and they are checked separately because they fail for different
 # reasons: `checks` is fast and opinionated about style, `test` is slow and only cares
-# whether the code is correct on each platform. A failure in one should not hide the other.
+# whether the code is correct on each platform, and `parity` compares what the MCP server
+# actually writes against real openpyxl. A failure in one should not hide the others.
 #
 # `cargo nextest` runs the tests. Note that nextest does not run doctests, so the doctests
 # are a separate step -- silently skipping them would leave the README examples unverified.
+#
+# The `parity` job is not optional. Five bugs got past 732 unit tests, every one of them a
+# case where the name matched, the test passed, and the feature did nothing -- including one
+# that left a workbook no reader could open. The Rust tests cannot see that class of bug;
+# these harnesses read the files back with openpyxl and can.
 
 name: CI
 
@@ -61,6 +67,70 @@ jobs:
       # `tools/parity.py` audits the public surface against openpyxl, but it needs a
       # checkout of the Python original, which is not a dependency of this project. Run it
       # locally with `python tools/parity.py path/to/openpyxl/openpyxl`.
+
+  # The MCP server's tools, checked through the protocol against real openpyxl.
+  parity:
+    name: MCP tools against openpyxl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-parity
+
+      # The harnesses speak JSON-RPC to a real server process, so there has to be one. This
+      # is the only job that needs a binary rather than a library.
+      - name: Build the server
+        run: cargo build --locked --bin ferroxl-mcp
+
+      # Pinned in requirements.txt, because a reference that drifts under you is a reference
+      # you stopped testing against: a new openpyxl release would turn a green build red for
+      # reasons that have nothing to do with this commit.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the reference
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tools/requirements.txt
+
+      # What the reference actually is, printed so a failure names the version rather than
+      # leaving it to be guessed at.
+      - name: Record the openpyxl version
+        run: python -c "import openpyxl; print('openpyxl', openpyxl.__version__)"
+
+      # Every tool, driven over stdio, then the file it wrote reopened with openpyxl.
+      - name: Every tool's output matches openpyxl
+        run: python tools/mcp_parity.py
+
+      # Every tool, called with only the arguments its schema marks required -- which is
+      # exactly what a model does after reading `tools/list`.
+      - name: Every tool accepts the call its schema describes
+        run: python tools/mcp_required.py
+
+      # What the happy path does not cover: a second call to a mutating tool, an empty range,
+      # a mistyped coordinate, and whether the workbook still opens afterwards.
+      - name: The tools survive being used twice
+        run: python tools/mcp_limits.py
+
+      # Neither openpyxl's tests nor its fixtures ship in the wheel, so a checkout is
+      # needed. Pinned to the tag PARITY.md was measured against: a moving reference turns a
+      # green build red for reasons that have nothing to do with the commit under test.
+      - name: Clone openpyxl at the pinned reference
+        run: |
+          git clone --depth 1 --branch 3.1.5 https://github.com/theorchard/openpyxl ../openpyxl
+          echo "OPENPYXL_CHECKOUT=$GITHUB_WORKSPACE/../openpyxl" >> "$GITHUB_ENV"
+
+      # openpyxl's own test suite, run against ferroxl as the implementation. See
+      # tools/upstream/README.md for what is covered and what cannot be.
+      - name: openpyxl's own tests, against ferroxl
+        run: python tools/upstream/run.py "$OPENPYXL_CHECKOUT"
 
   test:
     name: Tests on ${{ matrix.os }}

@@ -5,7 +5,97 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.7] - 2026-10-02
+## [Unreleased]
+
+Nothing yet.
+
+## [0.1.8] — 2026-10-05
+
+Six bugs, all of the same shape: a name matched, every unit test passed, and the feature did
+something other than what it claimed. None was a missing name, so `tools/parity.py` -- which
+matches names -- could not see any of them. Five produced a well-formed file that silently meant
+something else; one destroyed the file.
+
+### Fixed
+
+- **The 1904 date system was ignored on read.** `Cell::display_value` converted every serial
+  against the 1900 epoch, hardcoded, because it was not passed the workbook's date system. A
+  real Mac Excel workbook carrying `date1904="true"` therefore read every date **1462 days
+  early** -- four years and one day. `PARITY.md` claimed 1904 workbooks "round-trip exactly".
+  The write direction was already correct, so the damage was confined to reading: a date read
+  from a 1904 workbook and shown to a user was wrong and nothing said so.
+  Found by running openpyxl's own `tests/data/genuine/mac_date.xlsx` through both
+  implementations and comparing, in `tools/upstream/corpus.py`.
+  `display_value` now takes the workbook's base date; the old one-argument form is kept as the
+  1900 default for a caller that genuinely has no workbook in hand.
+
+- **`merge_cells` accepted a range whose corners ran backwards, and wrote a file nothing can
+  open.** `merge_cells("C3:A1")` recorded `<mergeCell ref="C3:A1"/>`, which openpyxl rejects
+  while *loading* — `1 must be greater than 3` — so the call reported success and left a workbook
+  that no longer opened, with the failure surfacing on some later unrelated read. This is the
+  worst shape the other four take: it destroys the file rather than quietly losing a feature.
+  Backwards ranges are now refused at the call site, as openpyxl's own `merge_cells` refuses
+  them, and both the column and the row corner are checked.
+- **A conditional format's differential style was written nowhere.** `Rule::dxf` is set when the
+  rule is built and belongs in `styles.xml`'s `<dxfs>` once the package is assembled, but
+  `ConditionalFormatting::collect_dxf_styles` — which performs that move — was defined and never
+  called. Every rule carrying a font colour, fill or bold was written with an empty `<dxfs>`, so
+  it matched and highlighted nothing: a rule that appears to do nothing. It now runs before the
+  style tables are built, because both halves depend on it — the worksheet needs the assigned
+  `dxfId` and `styles.xml` needs the collected styles — and it appends to a loaded workbook's
+  existing list rather than replacing it, so a loaded differential style keeps its index.
+- **An embedded image was invisible to openpyxl.** `<xdr:cNvPicPr>` was written carrying
+  `noChangeAspect` and `noChangeArrowheads`, which belong on its `<a:picLocks>` child.
+  openpyxl's `NonVisualPictureProperties` accepts neither, so its reader raises a `TypeError` —
+  and a reader that raises drops every image in the drawing. Excel renders it regardless, which
+  is what let this stand.
+- **`add_image` ignored its `anchor` argument.** The anchor was validated against the sheet and
+  then discarded, leaving the drawing on its default `Absolute` anchor. openpyxl's
+  `AbsoluteAnchor` has no `pic` attribute at all, so the image was unreadable there even once the
+  `cNvPicPr` attributes were fixed. Images are now anchored to the cell they were asked for,
+  which is the one-cell anchor openpyxl itself writes.
+- **`add_chart` pointed every series at one unrelated cell.** The handler's range parser returned
+  `(first column, point count)`, but `Reference` takes 0-based `(row, column)` *corners* — so a
+  series over `B2:B3` was written as `'Data'!$C$3`, and `pos2` was never passed at all. The
+  parser now returns both corners in the order `Reference` wants, and the categories argument is
+  applied instead of being accepted and dropped.
+
+### Added
+
+- **`tools/mcp_client.py`**, a line-delimited JSON-RPC client that keeps one server process alive,
+  so a test can make a sequence of calls against one workbook the way an agent would. Everything
+  is protocol-level: no Rust is imported and nothing is stubbed.
+- **`tools/mcp_parity.py`**, which drives all 41 tools and then opens what they wrote with real
+  openpyxl — 127 checks over values, formulas, styles, merges, validations, conditional formats,
+  tables, comments, charts, images, named ranges and defined names. Every test gets its own
+  workbook, so the order of the file cannot change a result.
+- **`tools/mcp_required.py`**, which calls every tool with only the arguments its schema declares
+  required. A model reads `tools/list`, sends those, and expects the call to work; if the handler
+  then complains about an argument nothing in the schema marked required, the schema is lying to
+  the only reader it has. All 41 pass, with five documented exceptions where JSON Schema cannot
+  express the requirement (an argument needed only for one value of another, or at least one of
+  six) and the error message names what is missing.
+- **`tools/mcp_limits.py`**, which asks what the happy-path suite does not: what happens on the
+  *second* call to a mutating tool, on an empty range, on a mistyped coordinate, and whether the
+  workbook still opens afterwards. 13 checks, and it prints the gaps it does not cover rather than
+  implying they work. This is where the backwards-merge bug surfaced — the tool reported success
+  and the damage was only visible in the file.
+- **`tools/upstream/`**, which takes openpyxl's own test suite and its fixture corpus -- 161 test
+  files, about 1,700 test functions -- as far as they can be taken. They are Python calling a
+  Python API, so they cannot be *run* against a Rust library, and pretending otherwise would be
+  the easiest way to make this look covered when it is not. What is possible:
+  - **`corpus.py`** reads every real workbook in `tests/data/genuine/` with both implementations
+    and compares them cell by cell, with openpyxl as the oracle. This found the 1904 bug.
+  - **`expectations.py`** cross-checks the numbers openpyxl's tests pin against this project's
+    tests: 152 of 158 numeric expectations appear in both. The six that do not are reported.
+  - **`manifest.py`** maps all 161 test files onto ferroxl modules, so "we have parity" is a
+    checklist that can be argued with rather than a claim.
+  - **`survey.py`** reports what is in the wider fixture corpus and what ferroxl can read of it.
+  - A **CI job** now runs all of it, so none of the six can regress silently. `tools/requirements.txt`
+    pins the reference exactly: a version range would let a new openpyxl release turn a green
+    build red for reasons unconnected to the commit.
+
+## [0.1.7] — 2026-10-02
 
 Everything since 0.1.6. Four features, and two of them fix failures that were silent: a
 worksheet that disappeared from a workbook with no error, and a `<pivotCaches>` element dropped
@@ -78,7 +168,7 @@ either.
 The silent-loss batch: everything here was read as absent or written from a literal, so a
 workbook using it loaded wrong and saved wrong without saying so.
 
-## [0.1.6] - 2026-10-02
+## [0.1.6] — 2026-10-02
 
 ### Fixed
 
@@ -430,4 +520,12 @@ Each of these is documented at the call site as well as in the README.
 - Files written by ferroxl are opened with openpyxl 3.x and the values, styles, merges,
   validations, comments, defined names and freeze panes compared.
 
+[Unreleased]: https://github.com/SV-stark/ferroxl/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.8
+[0.1.7]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.7
+[0.1.6]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.6
+[0.1.5]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.5
+[0.1.4]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.4
+[0.1.3]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.3
+[0.1.2]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.2
 [0.1.0]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.0
