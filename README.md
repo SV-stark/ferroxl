@@ -16,11 +16,17 @@ differs, and what is not there at all. The largest absences are pivot tables, ch
 sheets, and rich text. Named styles are done: all 49 of Excel's built-ins plus the workbook's
 own, with `cell.style` reading back a name again.
 
-Loading and re-saving no longer deletes what it does not model. Parts ferroxl has no API for --
-pivot tables and their caches, slicers, query tables, threaded comments, ActiveX controls,
-`customXml` -- are carried through with the content types and relationships that make them
-reachable, so an enterprise template survives being opened and saved. It does not make those
-features editable; `PARITY.md` lists exactly what that does and does not cover.
+Loading and re-saving no longer deletes what it does not model. Parts ferroxl has no API
+for — pivot tables and their caches, slicers, query tables, threaded comments, ActiveX
+controls, `customXml` — are carried through with the content types and relationships that
+make them reachable, so an enterprise template survives being opened and saved. It does not
+make those features editable; `PARITY.md` lists exactly what that does and does not cover.
+
+Two capabilities are not ports at all, because openpyxl has no equivalent. **Dependency
+tracing** answers what feeds a cell, what would go stale if one changed, and where the
+cycles are. **Formula evaluation** (`recalculate()`) fills in cached values for the
+formulas it can evaluate and reports the ones it cannot, rather than leaving every formula
+blank or guessing at a number.
 
 `PARITY.md` is measured by `tools/parity.py` against a real checkout of the Python, not
 written from memory. It also says what the audit *cannot* see: the tool matches names, so a
@@ -41,6 +47,7 @@ crates/
 - [Using it from an AI agent](#using-it-from-an-ai-agent)
 - [Reading a workbook](#reading-a-workbook)
 - [Writing a workbook](#writing-a-workbook)
+- [Formula evaluation](#formula-evaluation)
 - [What is covered](#what-is-covered)
 - [Feature parity](#feature-parity)
 - [Dates and the two calendars](#dates-and-the-two-calendars)
@@ -52,14 +59,17 @@ crates/
 
 ## Installation
 
-ferroxl is not on crates.io yet, so depend on the git tag:
-
 ```toml
 [dependencies]
-ferroxl = { git = "https://github.com/SV-stark/ferroxl", tag = "v0.1.0" }
+ferroxl = "0.1.8"
 ```
 
-Or work from a checkout, which is what you want if you want to change it:
+Both crates are on crates.io — the [library](https://crates.io/crates/ferroxl) and the
+[MCP server](https://crates.io/crates/ferroxl-mcp) — and are published in that order, because
+the server depends on the library by version. See [docs/PUBLISHING.md](docs/PUBLISHING.md)
+for how that works.
+
+To work on it instead, from a checkout:
 
 ```console
 $ git clone https://github.com/SV-stark/ferroxl
@@ -68,7 +78,7 @@ $ cargo build --workspace
 $ cargo run --example build_and_read   # writes orders.xlsx and reads it back
 ```
 
-To use it from another project on the same machine, point at the checkout:
+To use a checkout from another project on the same machine, point at it:
 
 ```toml
 [dependencies]
@@ -78,14 +88,14 @@ ferroxl = { path = "../ferroxl/crates/ferroxl" }
 The library has no unsafe code and six dependencies: `chrono` for date arithmetic,
 `quick-xml` for XML, `regex` for the few patterns that need one, `zip` for the package
 container, `png` for reading an image's dimensions, and `thiserror` for the error enum.
-The MCP server adds only `serde`, `serde_json` and `chrono`.
+The MCP server adds only `serde`, `serde_json`, `chrono` and `thiserror`.
 
 ## Quick start
 
 ```console
 $ git clone https://github.com/SV-stark/ferroxl
 $ cd ferroxl
-$ cargo test --workspace        # 481 tests
+$ cargo test --workspace        # 733 tests
 $ cargo run --example build_and_read
 wrote orders.xlsx
 sheets: ["Sheet1", "Orders"]
@@ -121,11 +131,19 @@ Two things catch people out, and both are openpyxl's behaviour rather than a Rus
 read and edit workbooks instead of guessing at them.
 
 ```console
-$ cargo run -p ferroxl-mcp -- --root ./spreadsheets
-ferroxl-mcp 0.1.0 — a Model Context Protocol server for Excel workbooks
+$ cargo run -p ferroxl-mcp -- --help
+ferroxl-mcp 0.1.8 — a Model Context Protocol server for Excel workbooks
 
 USAGE:
     ferroxl-mcp [--root <directory>]
+
+OPTIONS:
+    --root <directory>  Bound every path the tools may touch. Defaults to
+                        $FERROXL_ROOT, then the working directory.
+    -h, --help          Print this help and exit.
+    -V, --version       Print the version and exit.
+
+The server speaks JSON-RPC 2.0 over stdio, one message per line.
 ```
 
 Point an MCP client at it. For Claude Code:
@@ -147,8 +165,8 @@ Or in a client that reads `mcpServers` from a config file:
 }
 ```
 
-The agent then gets 33 tools — `list_sheets`, `read_cells`, `write_cells`, `summarize_range`,
-`add_chart`, `style_cells`, and so on. Two behaviours are worth knowing:
+The agent then gets 41 tools — `list_sheets`, `read_cells`, `write_cells`, `summarize_range`,
+`trace_precedents`, `add_chart`, `style_cells`, and so on. Two behaviours are worth knowing:
 
 - A tool that ran and failed returns `isError: true` with the message in `content`, so the
   model can read what went wrong and fix its call. Only an unknown tool is a JSON-RPC error.
@@ -197,15 +215,45 @@ differences run in both directions:
   flag. ferroxl keeps it because the behaviour is useful and cheap, but it is not part of
   the surface being ported, so a script written against openpyxl 3 will not find it.
 - **`read_only`, `keep_links` and `rich_text` are not implemented.** `read_only` would
-  need a streaming loader — see [Pending](#not-implemented) in `PARITY.md`. `keep_links`
-  needs external-link parts, which are not read or written at all. `rich_text` needs the
-  inline-runs model in cells, which does not exist; a rich-text cell is concatenated with
-  its formatting discarded, which is what openpyxl does too when `rich_text=False`.
+  need a streaming loader — see [Pending](PARITY.md#1-there-is-no-read-only-loader).
+  `keep_links` needs external-link parts, which are not read or written at all.
+  `rich_text` needs the inline-runs model in cells, which does not exist; a rich-text cell
+  is concatenated with its formatting discarded, which is what openpyxl does too when
+  `rich_text=False`.
 
 A value read back from a file is always reconstructed from the serial, so a date cell
 reports a `DateTime` — the same as openpyxl, which also loses the distinction between
 `date` and `datetime` on the way through a file. A value written in memory keeps its own
 type, so `ws.set("A1", CellValue::Date(..))` reads back as a `Date`.
+
+## Formula evaluation
+
+A saved workbook carries no computed values unless you ask for them, which is what openpyxl
+does. `Workbook::recalculate` fills them in:
+
+```rust
+# use ferroxl::{CellValue, Workbook};
+let mut workbook = Workbook::new();
+let sheet = workbook.active_sheet_mut().unwrap();
+sheet.set("A1", CellValue::number(2.0)).unwrap();
+sheet.set("A2", CellValue::number(3.0)).unwrap();
+sheet.set("A3", CellValue::formula("=SUM(A1:A2)")).unwrap();
+
+let report = workbook.recalculate();
+assert_eq!(report.computed_count(), 1);
+assert_eq!(workbook.active_sheet().unwrap().cached_value("A3"), Some(&CellValue::Number(5.0)));
+```
+
+It covers the operators, the aggregates, `IF`/`IFERROR`, `AND`/`OR`/`NOT` and the common
+text functions — 31 in all, and `formula::supports("XLOOKUP")` answers whether a name is
+handled without calling it and getting a wrong answer. A formula it cannot evaluate gets
+**no** cached value and appears in `Recalculation::unresolved` with the reason.
+`calcPr/@fullCalcOnLoad` is set, so Excel recomputes on open and a value the engine got
+wrong cannot survive a human opening the file.
+
+Formulas are evaluated in one pass over reading order, so a formula reading another
+formula's cell sees it as blank. `Worksheet::trace_precedents` gives the order to do it
+properly.
 
 ## Writing a workbook
 
@@ -247,21 +295,26 @@ instead, and `ferroxl::writer::save_workbook_to` streams it to any `Write`.
 | Module | Upstream | What it holds |
 | --- | --- | --- |
 | `cell` | `openpyxl/cell` | `Cell`, `CellValue`, data types, coordinates, read-only cells, formulas, shared formulas |
-| `charts` | `openpyxl/charts` | `Chart`, bar/line/scatter/pie, series, references, axes, titles, data labels |
+| `charts` | `openpyxl/charts` | all sixteen chart types, series, references, axes, titles, error bars, 3-D views |
 | `comments` | `openpyxl/comments` | `Comment` and the VML shapes that carry them |
 | `datavalidation` | `openpyxl/datavalidation` | `DataValidation` and its enums, cell-address collapsing |
-| `date_time` | `openpyxl/date_time` | the two date calendars, serial conversion, ISO-8601 parsing |
+| `date_time` | `openpyxl/date_time` | the two date calendars, serial conversion, ISO-8601 parsing, Julian days |
 | `drawing` | `openpyxl/drawing` | `Image`, `Drawing`, `Shape`, anchors, EMU conversions |
 | `exceptions` | `openpyxl/exceptions` | `Error` and its variants, openpyxl's exception hierarchy |
-| `formatting` | `openpyxl/formatting` | conditional formats, colour scales, icon sets, `CellIsRule`, `FormulaRule` |
+| `formatting` | `openpyxl/formatting` | conditional formats, colour scales, data bars, icon sets, `CellIsRule`, `FormulaRule` |
+| `formula` | `openpyxl/formula` | `Translator` for copy-paste and fill, and the evaluator behind `recalculate()` |
 | `namedrange` | `openpyxl/namedrange` | defined names, their destinations, and the range-string grammar |
-| `reader` | `openpyxl/reader` | the whole load path: strings, styles, workbook, worksheets, comments |
-| `styles` | `openpyxl/styles` | fonts, fills, borders, alignment, number formats, protection, the indexed palette |
+| `reader` | `openpyxl/reader` | the whole load path: strings, styles, workbook, worksheets, comments, zip repair |
+| `styles` | `openpyxl/styles` | fonts, gradient fills, borders, alignment, number formats, protection, named styles, the 49 built-ins, the indexed palette |
 | `units` | `openpyxl/units` | the unit constants Excel uses (`points_to_pixels`, `emu_to_cm`, …) |
-| `workbook` | `openpyxl/workbook` | `Workbook`, document properties, security, sheet management |
-| `worksheet` | `openpyxl/worksheet` | `Worksheet`, dimensions, views, panes, protection, header/footer, iteration |
-| `writer` | `openpyxl/writer` | the whole save path, including the streaming XML writer |
+| `workbook` | `openpyxl/workbook` | `Workbook`, document properties, security, sheet management, calculation properties |
+| `worksheet` | `openpyxl/worksheet` | `Worksheet`, dimensions, views, panes, protection, header/footer, tables, cell ranges, dependency tracing |
+| `writer` | `openpyxl/writer` | the whole save path, the streaming writer, and the pass-through of unmodelled parts |
 | `xml` | `openpyxl/xml` | an ElementTree-shaped element tree, a streaming writer, and the namespace constants |
+
+Two capabilities have no upstream module because openpyxl has no equivalent: cell dependency
+tracing (`worksheet::dependency`) and pass-through preservation (`reader::preserved`,
+`workbook::preserved`, `writer::preserved`).
 
 ## Feature parity
 
@@ -273,11 +326,18 @@ the two source trees, so it can be re-run rather than believed:
 $ python tools/parity.py path/to/openpyxl/openpyxl
 ```
 
-Of openpyxl's 272 public names, 195 have a direct counterpart. The 77 that do not are
-accounted for: 13 are genuinely pending, 37 are a name or a container that had to change,
-and 27 are `lxml` and Python infrastructure with no Rust equivalent. The pending list is
-the streaming writer, `Worksheet.range()` with offsets, the `use_iterators` loader, reading
-the stored `<dimension>`, zip repair, and reading charts back.
+Of openpyxl 3.1.5's 994 top-level public names, 678 have no counterpart, and 32 of its 183
+modules are matched name-for-name in full. The rest are concentrated in six packages that
+have no Rust module to point at: `drawing/` (126), `worksheet/` (117), `chart/` (81),
+`pivot/` (58), `descriptors/` (48) and `xml/` (41). What remains genuinely pending is
+short: a read-only loader, reading the stored `<dimension>`, and reading charts back.
+`PARITY.md` has the accounting per package.
+
+Two caveats on that number, both of which cut against it. The audit matches *names*, so a
+function that behaves wrongly reads as matched, and a name can match while the feature
+behind it is absent — the figures are an upper bound on what works, not a measurement of
+it. And the gap is not evenly spread: cell values, styles and the read/write round trip are
+solid, while everything around the cell is thin.
 
 ## Dates and the two calendars
 
@@ -290,7 +350,10 @@ consequences:
 - `from_excel` does not skip it, so serial 60 reads back as 1900-02-28 and serial 1 reads
   as 1899-12-30. The two functions disagree by one below the phantom day and agree above
   it. openpyxl behaves the same way; the tests pin both halves of the asymmetry.
-- A 1904 workbook (the classic Mac calendar) has no phantom day and round-trips exactly.
+- A 1904 workbook (the classic Mac calendar) has no phantom day, and its serials round-trip
+  against the 1904 epoch. Reading one used to convert against 1900 instead — every date came
+  back 1462 days early — so `display_value` now takes the workbook's base date.
+  `tools/upstream/corpus.py` checks this against openpyxl's own `mac_date.xlsx`.
 
 A cell's serial only becomes a date when its number format says so, so
 `ws.set_number_format("A1", "yyyy-mm-dd")` is what turns `40196` into a date.
@@ -366,22 +429,38 @@ The client configuration looks like this:
 
 ### The tools
 
-Thirty-three tools, grouped by what they are for. Every argument is documented in the
-schema the server advertises at `tools/list`.
+Forty-one tools, grouped by what they are for. Every argument is documented in the schema
+the server advertises at `tools/list`, and the grouping below is the one the server itself
+uses.
 
-**Reading** — `list_sheets`, `describe_sheet`, `read_cells`, `read_formulas`,
-`search_values`, `summarize_range`, `list_comments`, `list_named_ranges`, `export_csv`.
+**Inspection** — `list_sheets`, `describe_sheet`, `read_cells`, `read_formulas`,
+`trace_precedents`, `trace_dependents`, `check_circular_references`, `add_data_bar`,
+`add_icon_set`, `add_table`, `describe_table`, `set_gradient_fill`, `search_values`,
+`summarize_range`, `list_comments`, `list_named_ranges`, `export_csv`.
+
+The three `trace_*` tools are the ones openpyxl cannot answer at all: what feeds a cell,
+what would go stale if a cell changed, and every cycle in a sheet as a closed path. Excel
+refuses to calculate a workbook with a cycle, so `check_circular_references` is worth
+running before trusting a file you did not create. Summaries name at most a dozen cells and
+then give the count, because three thousand dependents cannot change a model's next decision
+but will consume the context window needed to make one.
 
 **Structure** — `create_workbook`, `add_sheet`, `remove_sheet`, `rename_sheet`,
 `merge_cells`, `unmerge_cells`, `freeze_panes`, `set_auto_filter`, `add_named_range`.
 
 **Values** — `set_cell`, `write_cells`, `append_row`, `clear_cells`.
 
-**Layout and appearance** — `set_column_width`, `set_row_height`, `set_header_footer`,
-`add_hyperlink`, `style_cells`, `set_number_format`, `add_data_validation`,
+**Layout** — `set_column_width`, `set_row_height`, `set_header_footer`, `add_hyperlink`.
+
+**Formatting** — `style_cells`, `set_number_format`, `add_data_validation`,
 `add_conditional_format`.
 
-**Drawing** — `add_chart`, `add_image`, `add_comment`.
+**Media and annotations** — `add_chart`, `add_image`, `add_comment`.
+
+The server does not evaluate formulas: a cell written with a formula has no cached result,
+exactly as openpyxl writes it, so `read_cells` returns the formula rather than a number.
+`trace_precedents` and `trace_dependents` answer the questions about the graph that a
+calculated value would otherwise have been needed for.
 
 ### How values are interpreted
 
@@ -418,13 +497,13 @@ a tool that silently drops an argument is worse than one that refuses.
 
 ```console
 $ cargo build --workspace                  # build
-$ cargo test --workspace                   # 481 tests
+$ cargo test --workspace                   # 733 tests
 $ cargo nextest run --workspace            # the same tests, in parallel; this is what CI runs
 $ cargo clippy --workspace --all-targets -- -D warnings
 $ cargo fmt --all --check
-$ cargo doc --workspace                    # API documentation
+$ cargo doc --workspace --no-deps          # API documentation
 $ python tools/check_readme.py             # the README examples are the doctests
-$ python tools/parity.py ../openpyxl        # audit the public surface against openpyxl
+$ python tools/parity.py path/to/openpyxl/openpyxl   # audit the public surface
 ```
 
 The examples in this README are the library's own doctests, checked by
@@ -440,9 +519,39 @@ The workspace is verified against real openpyxl: files this library writes are o
 openpyxl 3.x and the values, styles, merges, validations, comments, names and freeze panes
 are compared.
 
+Two harnesses cover the MCP server, because its output is what an agent's work actually
+becomes and openpyxl is how anyone else will read it:
+
+```console
+$ python tools/mcp_parity.py    # drive all 41 tools, then read each file back with openpyxl
+$ python tools/mcp_required.py  # call each tool with only its schema's required arguments
+$ python tools/mcp_limits.py    # second calls, empty ranges, bad input, does the file still open?
+```
+
+`tools/upstream/` goes further, using openpyxl's own test suite and its fixture corpus — 161
+test files, about 1,700 test functions, and a set of real workbooks from Excel, LibreOffice and
+Mac Excel:
+
+```console
+$ git clone --depth 1 --branch 3.1.5 https://github.com/theorchard/openpyxl ../openpyxl
+$ python tools/upstream/run.py ../openpyxl
+```
+
+`corpus.py` reads every real workbook with both implementations and compares them cell by
+cell, with openpyxl as the oracle. `manifest.py` maps all 161 test files onto ferroxl modules,
+so the parity claim is a checklist rather than an assertion. See
+[tools/upstream/README.md](tools/upstream/README.md) for what is and is not covered.
+
+Between them these found six bugs that `tools/parity.py` cannot see, because none of them is
+a missing name: a conditional format's differential style was never written, an embedded image
+was unreadable to openpyxl, `add_image` discarded its `anchor`, `add_chart` pointed every series
+at one unrelated cell, `merge_cells` accepted a backwards range and left a workbook that no
+longer opened, and the 1904 date system was ignored on read — a real Mac Excel workbook came
+back four years and one day early. All six passed every unit test, and all six run in CI now.
+
 ## Continuous integration and releases
 
-Two workflows under `.github/workflows`.
+Three workflows under `.github/workflows`.
 
 **`ci.yml`** runs on every push to `main` and every pull request, in three jobs:
 
@@ -458,7 +567,7 @@ Two workflows under `.github/workflows`.
 The dependency cache is shared across the matrix, so the first job to finish warms it for
 the rest.
 
-**`release.yml`** runs when a tag of the form `v0.1.0` is pushed. It builds `ferroxl-mcp`
+**`release.yml`** runs when a tag of the form `v0.1.8` is pushed. It builds `ferroxl-mcp`
 for five targets:
 
 | Target | Archive |
@@ -476,8 +585,14 @@ print `--version` fails rather than shipping. The tag is checked against the ver
 files are combined into one `SHA256SUMS` and verified before anything is published, and the
 release is drafted first and only published once the file count matches the matrix.
 
+**`publish.yml`** runs when a GitHub release is *published*, not when the tag is pushed, so
+a failed binary build cannot put a crate on crates.io. It publishes `ferroxl` first, waits
+for the registry index to list it, then publishes `ferroxl-mcp` — the server depends on the
+library by version, so publishing both at once fails in a way that reads like a version
+number is wrong rather than a race. See [docs/PUBLISHING.md](docs/PUBLISHING.md).
+
 ```console
-$ git tag v0.1.0 && git push origin v0.1.0
+$ git tag v0.1.8 && git push origin v0.1.8
 ```
 
 ## License

@@ -10,9 +10,8 @@ Status key: **shipped**, **next**, **later**, **declined**, **partial**.
 
 ## 1. Formula evaluation (`workbook.recalculate()`)
 
-**Status: done, as a deliberate subset.** Implemented in 0.1.6. This entry is kept because
-the reasoning below still governs what is *missing*, which is most of the interesting
-functions.
+**Status: shipped in 0.1.7, as a deliberate subset.** This entry is kept because the
+reasoning below still governs what is *missing*, which is most of the interesting functions.
 
 What shipped is the part that can be made correct: the operators, `SUM`, `AVERAGE`, `MIN`,
 `MAX`, `COUNT`, `COUNTA`, `PRODUCT`, `ROUND`/`ROUNDUP`/`ROUNDDOWN`, `ABS`, `INT`, `SIGN`,
@@ -24,11 +23,15 @@ formula naming one comes back *unresolved* rather than with a plausible number.
 
 An expression parser, a value lattice matching Excel's (numbers, text, booleans, errors,
 blanks, and the coercion rules between them), a function library, and a recalculation
-order. The recalculation order is now available: [`Worksheet::trace_precedents`][dep] gives
-the topological order for a cell, and `Worksheet::circular_references` finds the nodes that
-have none. That is roughly a fifth of the work, and it was built for a different reason.
+order. The recalculation order was available before the engine: `Worksheet::trace_precedents`
+gives the topological order for a cell, and `Worksheet::circular_references` finds the nodes
+that have none. That was roughly a fifth of the work, and it was built for a different reason.
 
-### Why it is not next
+The shipped engine evaluates in one pass over reading order, so a formula reading another
+formula's cell sees it as blank. `trace_precedents` is the order to do it properly, which is
+the next step rather than a redesign.
+
+### Why it was not shipped whole
 
 A wrong cached value is worse than a missing one. A missing `<v>` is visible — a reader
 knows to recalculate. A wrong one is silently believed, and the error surfaces days later
@@ -43,39 +46,53 @@ is a place to be subtly wrong.
 
 ### What a defensible version looks like
 
-Read-only, opt-in, and never silent. A `Recalculation` that returns the values it computed
-and the errors it could not, and writes `<v>` only where it succeeded. A shipped function
-list in the docs, so a caller can check `supports("XLOOKUP")` instead of discovering the
-gap by getting a wrong number. Deprecations excluded. Start with arithmetic, comparison,
-`IF`, `AND`/`OR`/`NOT`, and the aggregates; leave `SUMIFS` out until it is right.
+Read-only, opt-in, and never silent — which is what shipped. A `Recalculation` that returns
+the values it computed and the errors it could not, and writes `<v>` only where it succeeded.
+A shipped function list in the docs, so a caller can check `supports("XLOOKUP")` instead of
+discovering the gap by getting a wrong number; there is a test asserting that list matches the
+dispatcher, so a name cannot be advertised without being implemented. Deprecations excluded.
+Arithmetic, comparison, `IF`, `AND`/`OR`/`NOT` and the aggregates first; `SUMIFS` stays out
+until it is right.
 
-### Why it is still worth doing
+### What is still worth doing
 
 It is the only item on this list that openpyxl's user base asks for by name, and the only
-one where being wrong is invisible. Both facts point the same direction: it needs
-engineering, not a weekend.
+one where being wrong is invisible. Both facts still point the same direction: the remaining
+functions need engineering, not a weekend.
 
 ---
 
 ## 2. Non-destructive editing
 
-**Status: partial.** The most valuable item here, and the one that most changes the
-architecture.
+**Status: partial — the unmodelled-part half shipped in 0.1.7.** The most valuable item
+here, and the one that most changes the architecture.
 
 ### What exists
 
-`keep_vba` already copies the `vbaProject.bin` family of parts through verbatim
-(`reader/excel.rs` retains the raw archive, `writer/excel.rs` copies the parts out). That
-is the whole-archive case for the one part people most often lose.
+Two things, and they are different in kind.
 
-### What is missing, and why it is big
+`keep_vba` copies the `vbaProject.bin` family of parts through verbatim (`reader/excel.rs`
+retains the raw archive, `writer/excel.rs` copies the parts out). That is the whole-archive
+case for the one part people most often lose.
 
-Everything else. The current model is parse-into-structs, write-structs-out. Bit-for-bit
-preservation requires *not parsing* parts the library does not model — pivot caches, slicer
-state, PowerQuery connections, `calcChain`, threaded comments, drawing XML. So this is a
-second code path alongside the current one rather than a modification of it, which is good
-news: it is additive and can ship behind a feature flag without putting existing behaviour
-at risk.
+Since 0.1.7, `Workbook::preserved` holds *every* part, content type, relationship and
+`<workbook>`/`<worksheet>` child the writer does not produce, and the writer writes them
+back — pivot caches, slicers, query tables, connections, threaded comments, ActiveX
+controls, `customXml`. Copying the bytes was the easy half; reachability is the part that is
+easy to get wrong, because a preserved part nothing points at is inert. The relationship
+travels too, its id remapped where the writer has already used one, and the `r:id` in the
+referencing element rewritten to match.
+
+Known limits, recorded rather than left to be found: unknown *attributes* on `<worksheet>`
+and `<sheetPr>` (children carry over, attributes do not), content inside `<sheetData>`,
+which is rebuilt from the cell model, and byte-identical zip entries — the bytes are
+re-compressed, so an entry is content-identical rather than byte-identical.
+
+### What is still missing, and why it is big
+
+**Editing.** A preserved pivot table or slicer can be carried through but not changed, and
+that is the gap that matters. It needs the same second code path this entry originally
+proposed: modelling the OOXML constructs ferroxl currently passes through.
 
 The genuinely hard part is what the proposal asks for beyond passthrough: rewriting only
 the modified row inside `sheet1.xml` and passing through everything else. That needs
@@ -83,12 +100,16 @@ byte-offset splicing into `<sheetData>`, with correct handling of the `r`, `span
 dimension attributes that span rows. It is doable and it is delicate, and a mistake there
 corrupts the file in ways that are hard to attribute.
 
+Bit-for-bit preservation would also require *not parsing* parts the library does not model,
+which the current parse-into-structs model cannot express. That part is still open.
+
 ### Recommended shape
 
 `Workbook::open_preserving(path)` returning a document that holds unmodelled parts as
 `Vec<u8>` and modelled parts as structs, with `save()` writing each from whichever
-representation it has. Sheets become row-level: parse lazily, and on save re-emit only
-rows that changed, keeping the original bytes for the rest.
+representation it has — which is what `preserved` now is, minus the open/save split. Sheets
+become row-level: parse lazily, and on save re-emit only rows that changed, keeping the
+original bytes for the rest.
 
 ---
 
@@ -278,15 +299,18 @@ a tool an agent trusts and one it has to double-check every time.
 ## Ordering
 
 1. **0.1.2** — dependency tracing. Shipped.
-2. **0.1.3** — `compress_to_markdown`, `get_column_by_header`, workbook diffing. All small,
-   all independent, all useful.
-3. **0.2.0** — the expression parser, shared by `sql_query` and `recalculate`. It is the
-   only item that has to be right rather than merely present, so it gets a version bump
-   and its own review.
-4. **0.3.0** — non-destructive editing behind a feature flag. Additive, so it can ship
-   without putting 0.2 behaviour at risk.
+2. **0.1.3** — the `formula::Translator` half of formula evaluation. Shipped.
+3. **0.1.7** — the evaluator and pass-through preservation. Shipped, both as deliberate
+   subsets: 31 functions and the unmodelled parts.
+4. **Next** — `compress_to_markdown`, `get_column_by_header`, workbook diffing. All small,
+   all independent, all useful, and none of them has to be right rather than merely present.
+5. **0.2.0** — multi-pass recalculation in dependency order, and the lookups
+   (`VLOOKUP`, `XLOOKUP`, `INDEX`, `MATCH`) that most often want a cached value. These have
+   to be right rather than merely present, so they get a version bump and their own review.
+6. **0.3.0** — editing the constructs that are currently passed through, and rayon.
 
-Items 3, 4 and 5 (formula evaluation, non-destructive editing, rayon) each break the
-build-time dependency set or the round-trip model. That is what the major versions are for.
+What is left on 4 and 5 does not change the dependency set or the round-trip model, which is
+why they can ship as patch releases. Non-destructive *editing* (item 2) and rayon (item 3)
+both do, and that is what the major versions are for.
 
 [dep]: https://docs.rs/ferroxl/latest/ferroxl/worksheet/struct.Worksheet.html#method.trace_precedents
