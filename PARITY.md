@@ -771,14 +771,14 @@ does, whether a rejected call leaves the file readable.
 
 **openpyxl's own suite, as far as it can be taken.** 161 test files and about 1,700 test
 functions are Python calling a Python API, so they cannot be *run* against a Rust library.
-`tools/upstream/` takes the three things that can be taken. `corpus.py` reads every real
-workbook in openpyxl's `tests/data/genuine/` — files from Excel, LibreOffice and Mac Excel —
-with both implementations and compares them cell by cell, with openpyxl as the oracle.
-`expectations.py` cross-checks the numbers openpyxl's tests pin against this project's: 152 of
-158 appear in both. `manifest.py` maps all 161 files onto ferroxl modules so the claim is a
-checklist rather than an assertion. All four run in CI.
+`tools/upstream/` takes the three things that can be taken. `corpus.py` reads all twelve
+workbooks under openpyxl's `tests/data` — files from Excel, LibreOffice and Mac Excel, plus
+openpyxl's own reader fixtures, six of them `.xlsm` — with both implementations and compares them
+cell by cell, with openpyxl as the oracle. `expectations.py` cross-checks the numbers openpyxl's
+tests pin against this project's: 152 of 158 appear in both. `manifest.py` maps all 161 files
+onto ferroxl modules so the claim is a checklist rather than an assertion. All four run in CI.
 
-This found six bugs a name audit cannot see, because none of them is a missing name:
+This found seven bugs a name audit cannot see, because none of them is a missing name:
 a conditional format's `dxf` was never collected into `<dxfs>`; an embedded image carried
 `noChangeAspect` on the wrong element, which makes openpyxl's reader raise and drop every
 image in the drawing; `add_image` validated its `anchor` and then discarded it, leaving a
@@ -786,8 +786,17 @@ picture in an `absoluteAnchor` that openpyxl has no `pic` slot for; `add_chart` 
 `(column, count)` where `Reference` wants `(row, column)` corners, so every series was written
 as one unrelated cell; `merge_cells` accepted a backwards range and wrote
 `<mergeCell ref="C3:A1"/>`, which no reader can parse — the call reported success and left a
-workbook that no longer opened; and the 1904 date system was ignored on read, so a real Mac
-Excel workbook came back four years and one day early.
+workbook that no longer opened; the 1904 date system was ignored on read, so a real Mac
+Excel workbook came back four years and one day early; and a workbook whose part was not named
+`xl/workbook.xml` was refused outright, because the reader assumed the conventional name instead
+of following the package relationships that actually locate it.
+
+`corpus.py` is also honest about the 14 fixtures it cannot reach: 8 hand-made worksheet XML
+files and 6 writer fragments, which are not packages and so cannot be loaded by either
+implementation without being wrapped first. They are the fixtures for the reader edges listed
+under [Pending](#pending) — an absent, invalid or unspanned stored `<dimension>`, empty rows,
+merged ranges, hyperlinks — so a green corpus run says nothing about them. It prints them by
+name on every run for exactly that reason.
 
 The common thread is that each one produces a well-formed file that silently means something
 else, and one of them is a file that is not well-formed at all. That is the failure mode this
@@ -798,7 +807,7 @@ through the API: every one of these passed every unit test.
 ferroxl's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
-The suite is 733 tests — 598 in the library, 123 in the MCP server and 12 doctests — and
+The suite is 735 tests - 600 in the library, 123 in the MCP server and 12 doctests - and
 `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check` and
 `RUSTDOCFLAGS=-D warnings cargo doc` are all clean.
 
@@ -822,6 +831,6 @@ The converse also holds: a name can match while the feature behind it is absent.
 counts those as matched, so the module figures in [Summary](#summary) are an upper bound on
 what works rather than a measurement of it.
 
-The six bugs listed under [How parity is verified](#how-parity-is-verified) make the point
+The seven bugs listed under [How parity is verified](#how-parity-is-verified) make the point
 concretely. Every one of them is a case where a name matched perfectly, every unit test passed,
 and the feature did something other than what it claimed.

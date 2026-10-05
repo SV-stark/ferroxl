@@ -9,6 +9,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A workbook part not named `xl/workbook.xml` was rejected outright.** The reader assumed the
+  conventional name rather than following the package relationships, so a valid OOXML package
+  whose workbook was called something else failed to load at all — "the archive has no
+  xl/workbook.xml part". openpyxl ships a fixture for precisely this case,
+  `tests/data/reader/nonstandard_workbook_name.xlsx`, whose workbook is `xl/workbook10.xml`, and
+  openpyxl reads it without complaint. The workbook part is now resolved through the
+  `officeDocument` relationship in `_rels/.rels`, with its own `.rels` found beside it rather
+  than at a fixed path. Naming is still tried first, so the common case is unaffected and a
+  relationship pointing at a part the archive does not contain cannot shadow a real one.
+
+  Found by extending `tools/upstream/corpus.py` from `genuine/` to the whole of `tests/data`,
+  which took coverage from five workbooks to all twelve — six of them `.xlsm` and the rest from
+  openpyxl's reader fixtures, none of which had been checked before.
+
 - **The parity CI job could never have passed.** Two faults, both in the harness plumbing and
   neither in the library. `find_binary()` looked for the server one level *above* the
   workspace instead of in cargo's own `target/`, so it resolved only on a machine exporting

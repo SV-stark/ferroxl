@@ -36,7 +36,7 @@ nothing at all.
 
 | | what it is | gate? |
 | --- | --- | --- |
-| `corpus.py` | Every real workbook in `tests/data/genuine/`, read by openpyxl **and** by the server, compared cell by cell. openpyxl is the oracle. | yes |
+| `corpus.py` | Every workbook under `tests/data`, read by openpyxl **and** by the server, compared cell by cell. openpyxl is the oracle. | yes |
 | `expectations.py` | The numbers openpyxl's tests pin, cross-checked against this project's tests. | report |
 | `manifest.py` | All 161 test files mapped onto ferroxl modules, with what has no counterpart. | report |
 | `survey.py` | What is in the wider fixture corpus and what ferroxl can read of it. | report |
@@ -47,7 +47,15 @@ that fails on "this is incomplete" teaches everyone to ignore the output.
 
 ## What corpus.py found
 
-It found a bug nothing else had: **the 1904 date system was ignored on read.**
+Two bugs, each found by a group of fixtures it did not previously look at.
+
+Extending it from `genuine/` (5 workbooks) to all of `tests/data` (12) found
+**a workbook part not named `xl/workbook.xml` was rejected outright.** The reader assumed the
+conventional name instead of following the package relationships, so openpyxl's own
+`reader/nonstandard_workbook_name.xlsx` — whose workbook is `xl/workbook10.xml` — failed to
+load at all. openpyxl reads it without complaint.
+
+Then, within `genuine/`, it found **the 1904 date system was ignored on read.**
 `Cell::display_value` converted every serial against the 1900 epoch, so a real Mac Excel
 workbook — `tests/data/genuine/mac_date.xlsx`, which carries `date1904="true"` — read every
 date four years and one day early. That is 1462 days, the exact gap between the two epochs,
@@ -68,12 +76,21 @@ from a 1904 workbook and shown to a user was wrong, and nothing anywhere said so
   are reported rather than applied silently, so a truncated row is never mistaken for a clean
   comparison. `reader/bigfoot.xlsx` has 1024 sheets on purpose, and every MCP call reloads the
   workbook, so sweeping it would cost 1024 full loads for no extra coverage.
+- **The 14 fixtures that are not workbooks at all** — 8 hand-made worksheet XML files in
+  `reader/` and 6 writer fragments in `writer/`. A fragment cannot be loaded by either
+  implementation without being wrapped in a package first, so nothing here touches them. That
+  is worth being blunt about: they are the fixtures for exactly the reader edges `PARITY.md`
+  lists as pending — a stored `<dimension>` that is absent, invalid, or unspanned; empty rows;
+  merged ranges; hyperlinks — so the corpus reading "all green" says nothing about them.
+  `corpus.py` prints them by name on every run so the gap cannot be mistaken for coverage.
 - **Formula arithmetic.** A formula is compared as a string. openpyxl without `data_only`
   returns the formula text, so there is no cached value to compare against.
 
 ## The honest limit
 
-This directory raises the floor; it does not reach the ceiling. Five bugs got past 732 unit
-tests, and corpus.py found a sixth — so the classes these tools catch are real and the
-classes they miss are certainly still there. The manifest is the checklist for closing that
-gap; a row marked "ported" is not yet a row with comparable coverage.
+This directory raises the floor; it does not reach the ceiling. Seven bugs got past 733 unit
+tests, and two of those seven were found by `corpus.py` alone — which is the argument for
+running it, and also the reason not to read its green as proof. The classes it catches are real;
+the classes it misses are certainly still there. The manifest is the checklist for closing that
+gap, and the uncounted fixtures above are the sharpest item on it. A row marked "ported" is not
+yet a row with comparable coverage.

@@ -1,9 +1,19 @@
-"""Every real workbook openpyxl ships, read by both implementations and compared cell by cell.
+"""Every workbook openpyxl ships under tests/data, read by both implementations and compared
+cell by cell.
 
-openpyxl's `tests/data/genuine/` holds files produced by Excel, LibreOffice and Mac Excel --
-not files written by openpyxl. They exist precisely because they contain combinations nobody
-imagined, which is the class of file that found all five of ferroxl's silent-loss bugs. This
-runs openpyxl and ferroxl over every one of them and asserts they agree.
+Three groups, and they are not equally interesting:
+
+  `genuine/` files produced by Excel, LibreOffice and Mac Excel -- not written by openpyxl.
+      These contain combinations nobody imagined, which is the class of file that found the
+      1904 date-system bug. The most valuable group.
+
+  `reader/` the reader's own fixtures, including `bigfoot.xlsx` with 1024 sheets, five
+      `.xlsm` files that carry VBA, and `nonstandard_workbook_name.xlsx`. These exercise
+      the paths `genuine/` does not.
+
+  `writer/` not workbooks at all -- six XML fragments asserting what the writer should
+      produce. Nothing here can be loaded, so they are counted and reported as uncovered
+      rather than quietly skipped.
 
 openpyxl is the oracle and ferroxl the system under test: every value here was produced by
 the reference implementation, not by this project, so a failure means a divergence rather than
@@ -49,13 +59,27 @@ def check(name, ok, detail=""):
     print(f"{mark}{name}" + (f"\n        {detail}" if detail and not ok else ""))
 
 
-def genuine(root: Path) -> list[Path]:
-    """The real-world workbooks from a checkout's `tests/data/genuine`.
+def workbooks(root: Path) -> list[Path]:
+    """Every workbook fixture under `tests/data`, from every group.
 
     `root` is the checkout, not the package, so the fixtures live under `root/openpyxl/`.
     """
-    base = root / "openpyxl" / "tests" / "data" / "genuine"
-    return sorted(p for p in base.glob("*") if p.suffix.lower() in (".xlsx", ".xlsm"))
+    base = root / "openpyxl" / "tests" / "data"
+    return sorted(
+        path
+        for path in base.rglob("*")
+        if path.is_file() and path.suffix.lower() in (".xlsx", ".xlsm")
+    )
+
+
+def uncovered(root: Path) -> list[Path]:
+    """The fixtures that are not workbooks, so they cannot be loaded and compared."""
+    base = root / "openpyxl" / "tests" / "data"
+    return sorted(
+        path
+        for path in base.rglob("*")
+        if path.is_file() and path.suffix.lower() not in (".xlsx", ".xlsm")
+    )
 
 
 def normalise(value):
@@ -208,16 +232,23 @@ def compare(path: Path, server: Server) -> None:
 
 def main() -> int:
     root = Path(sys.argv[1] if len(sys.argv) > 1 else "../openpyxl").resolve()
-    corpus = root / "openpyxl" / "tests" / "data" / "genuine"
+    corpus = root / "openpyxl" / "tests" / "data"
     if not corpus.is_dir():
-        print(f"no genuine fixture corpus at {corpus}")
+        print(f"no fixture corpus at {corpus}")
         return 2
 
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True)
 
-    files = genuine(root)
-    print(f"{len(files)} genuine workbooks in {corpus}\n")
+    files = workbooks(root)
+    groups = {}
+    for path in files:
+        groups.setdefault(path.parent.name, []).append(path)
+
+    print(f"{len(files)} workbooks under {corpus}\n")
+    for group in sorted(groups):
+        print(f"  {group}/: {len(groups[group])}")
+    print()
 
     with Server(WORK) as server:
         server.initialize()
@@ -230,13 +261,23 @@ def main() -> int:
     failed = [name for name, ok in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} fixture checks passed")
 
+    leftovers = uncovered(root)
     print(
         "\nnot asserted here:\n"
         f"  - rows past {MAX_ROWS} or columns past {MAX_COLUMNS}, for speed\n"
+        f"  - sheets past {MAX_SHEETS} of a workbook; bigfoot.xlsx has 1024 and every MCP call\n"
+        "    reloads the workbook, so a full sweep would be 1024 loads\n"
         "  - formulas' cached values: openpyxl without data_only returns the formula string,\n"
         "    which is compared, but the arithmetic is not\n"
         "  - charts and images: openpyxl 3.1.5's own reader does not return them either, so\n"
-        "    there is no oracle for them -- the writer side is covered by tools/mcp_parity.py"
+        "    there is no oracle for them -- the writer side is covered by tools/mcp_parity.py\n"
+        f"  - the {len(leftovers)} fixtures that are not workbooks and so cannot be loaded at all:\n"
+        + "".join(f"      {path.parent.name}/{path.name}\n" for path in leftovers)
+        + "    These are the reader's hand-made worksheet XML (a stored dimension that is absent,\n"
+        "    invalid or unspanned; empty rows; merged ranges; hyperlinks) and the writer's XML\n"
+        "    fragments. They test exactly the reader edges PARITY.md lists as pending, and\n"
+        "    nothing here exercises them: a fragment has to be wrapped in a package before either\n"
+        "    implementation will open it."
     )
     if failed:
         print("\nfailed:")

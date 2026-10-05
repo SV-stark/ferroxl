@@ -95,7 +95,7 @@ The MCP server adds only `serde`, `serde_json`, `chrono` and `thiserror`.
 ```console
 $ git clone https://github.com/SV-stark/ferroxl
 $ cd ferroxl
-$ cargo test --workspace        # 733 tests
+$ cargo test --workspace        # 735 tests
 $ cargo run --example build_and_read
 wrote orders.xlsx
 sheets: ["Sheet1", "Orders"]
@@ -497,7 +497,7 @@ a tool that silently drops an argument is worse than one that refuses.
 
 ```console
 $ cargo build --workspace                  # build
-$ cargo test --workspace                   # 733 tests
+$ cargo test --workspace                   # 735 tests
 $ cargo nextest run --workspace            # the same tests, in parallel; this is what CI runs
 $ cargo clippy --workspace --all-targets -- -D warnings
 $ cargo fmt --all --check
@@ -543,17 +543,19 @@ An archive, not a clone, and not by preference: openpyxl 3.x is hosted on Heptap
 refuses anonymous git-over-https, and the GitHub mirror stops at 1.9.0 with no 3.x tags. See
 [tools/upstream/README.md](tools/upstream/README.md) for the details.
 
-`corpus.py` reads every real workbook with both implementations and compares them cell by
-cell, with openpyxl as the oracle. `manifest.py` maps all 161 test files onto ferroxl modules,
+`corpus.py` reads all twelve workbooks openpyxl ships — from Excel, LibreOffice, Mac Excel and
+its own reader fixtures — with both implementations and compares them cell by cell, with
+openpyxl as the oracle. `manifest.py` maps all 161 test files onto ferroxl modules,
 so the parity claim is a checklist rather than an assertion. See
 [tools/upstream/README.md](tools/upstream/README.md) for what is and is not covered.
 
-Between them these found six bugs that `tools/parity.py` cannot see, because none of them is
+Between them these found seven bugs that `tools/parity.py` cannot see, because none of them is
 a missing name: a conditional format's differential style was never written, an embedded image
 was unreadable to openpyxl, `add_image` discarded its `anchor`, `add_chart` pointed every series
 at one unrelated cell, `merge_cells` accepted a backwards range and left a workbook that no
-longer opened, and the 1904 date system was ignored on read — a real Mac Excel workbook came
-back four years and one day early. All six passed every unit test, and all six run in CI now.
+longer opened, the 1904 date system was ignored on read — a real Mac Excel workbook came back
+four years and one day early — and a workbook whose part was not named `xl/workbook.xml` was
+rejected outright. All seven passed every unit test, and all seven run in CI now.
 
 ## Continuous integration and releases
 

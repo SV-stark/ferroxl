@@ -24,6 +24,7 @@ use crate::reader::worksheet::{read_worksheet, WorksheetParseContext};
 use crate::workbook::Workbook;
 use crate::xml::constants::{
     ARC_CORE, ARC_SHARED_STRINGS, ARC_STYLE, ARC_THEME, ARC_WORKBOOK, PACKAGE_WORKSHEET_RELS,
+    PKG_REL_NS,
 };
 use crate::xml::functions::fromstring;
 
@@ -168,14 +169,20 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
         workbook.vba_archive = Some(bytes.to_vec());
     }
 
-    // `xl/workbook.xml` is the manifest; without it there is nothing to load. openpyxl
-    // raises a `KeyError` from its manifest reader in the same situation.
-    if !names.iter().any(|name| name == ARC_WORKBOOK) {
-        return Err(Error::InvalidFile(format!(
-            "the archive has no {} part",
-            ARC_WORKBOOK
-        )));
-    }
+    // The workbook part is found through the package relationships, not by assuming its name.
+    // `xl/workbook.xml` is what Excel writes, but the name is a convention: a generator that
+    // picked `xl/workbook10.xml` would produce a perfectly valid package, and a reader that
+    // insists on the conventional name rejects it. openpyxl resolves it the same way, from the
+    // `officeDocument` relationship in `_rels/.rels`, which is what that relationship is for.
+    let workbook_part = match find_workbook_part(&mut archive, &names) {
+        Some(part) => part,
+        None => {
+            return Err(Error::InvalidFile(format!(
+                "the archive has no {} part, and no officeDocument relationship to one",
+                ARC_WORKBOOK
+            )));
+        }
+    };
 
     // Core properties and the date system are optional; a missing part is not an error.
     if let Some(data) = read_part(&mut archive, ARC_CORE) {
@@ -183,7 +190,7 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
             workbook.properties = properties;
         }
     }
-    if let Some(data) = read_part(&mut archive, ARC_WORKBOOK) {
+    if let Some(data) = read_part(&mut archive, &workbook_part) {
         workbook.calculation = crate::reader::workbook::read_calc_properties(&data);
         if let Ok(Some(active)) = read_workbook_settings(&data) {
             workbook.active_sheet_index = active;
@@ -218,7 +225,7 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
     workbook.named_styles = style_table.named_styles.clone();
 
     // Resolve which archive parts hold which worksheet.
-    let sheets = detect_parts(&mut archive, &names)?;
+    let sheets = detect_parts(&mut archive, &names, &workbook_part)?;
 
     // Everything the writer will not produce itself, captured before the archive is closed.
     // Without this a pivot table, a slicer or an ActiveX control is not preserved, it is
@@ -269,7 +276,7 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
         workbook.active_sheet_index = 0;
     }
 
-    if let Some(data) = read_part(&mut archive, ARC_WORKBOOK) {
+    if let Some(data) = read_part(&mut archive, &workbook_part) {
         let titles = workbook.get_sheet_names();
         workbook.named_ranges =
             read_named_ranges(&data, &|title: &str| titles.iter().position(|t| t == title))?;
@@ -277,19 +284,68 @@ fn load_from_bytes(bytes: &[u8], options: LoadOptions) -> Result<Workbook> {
     Ok(workbook)
 }
 
+/// The package root's relationships part.
+const ARC_PACKAGE_RELS: &str = "_rels/.rels";
+
+/// The relationship type that names the workbook part.
+const OFFICE_DOCUMENT_REL: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument";
+
+/// Find the workbook part by name if it is the conventional one, otherwise through the
+/// package relationships.
+///
+/// The relationship is the authority: a package whose workbook is not called
+/// `xl/workbook.xml` is still valid OOXML, and openpyxl reads one without complaint. Naming
+/// is checked first only so that the overwhelmingly common case does not pay for parsing
+/// `_rels/.rels`, and because a relationship pointing at a part the archive does not contain
+/// is worse than a plainly-named part that is really there.
+fn find_workbook_part(
+    archive: &mut ZipArchive<Cursor<Vec<u8>>>,
+    names: &[String],
+) -> Option<String> {
+    if names.iter().any(|name| name == ARC_WORKBOOK) {
+        return Some(ARC_WORKBOOK.to_string());
+    }
+
+    let data = read_part(archive, ARC_PACKAGE_RELS)?;
+    let root = crate::xml::functions::fromstring(&data).ok()?;
+    let relationship = format!("{{{PKG_REL_NS}}}Relationship");
+
+    for node in root.find_all(relationship) {
+        if node.get("Type") != Some(OFFICE_DOCUMENT_REL) {
+            continue;
+        }
+        let Some(target) = node.get("Target") else {
+            continue;
+        };
+        // Targets may be absolute from the package root or relative to the root.
+        let resolved = target.strip_prefix('/').unwrap_or(target);
+        if names.iter().any(|name| name == resolved) {
+            return Some(resolved.to_string());
+        }
+    }
+    None
+}
+
 fn detect_parts(
     archive: &mut ZipArchive<Cursor<Vec<u8>>>,
     names: &[String],
+    workbook_part: &str,
 ) -> Result<Vec<DetectedSheet>> {
     let Some(content_types) = read_part(archive, crate::xml::constants::ARC_CONTENT_TYPES) else {
         return Ok(Vec::new());
     };
     let content_types = read_content_types(&content_types)?;
-    let Some(workbook_data) = read_part(archive, ARC_WORKBOOK) else {
+    let Some(workbook_data) = read_part(archive, workbook_part) else {
         return Ok(Vec::new());
     };
-    let rels_data = read_part(archive, crate::xml::constants::ARC_WORKBOOK_RELS)
-        .ok_or_else(|| Error::InvalidFile("workbook relationships are missing".into()))?;
+    // The workbook's own `.rels` sits beside it, named after the part rather than fixed.
+    let rels_name = crate::reader::preserved::rels_path_for(workbook_part);
+    let Some(rels_data) = read_part(archive, &rels_name) else {
+        return Err(Error::InvalidFile(format!(
+            "the relationships for {workbook_part} are missing"
+        )));
+    };
     let rels: HashMap<usize, String> = read_rels(&rels_data)?;
     let sheets = read_sheets(&workbook_data)?;
     let detected = detect_worksheets(&content_types, &rels, &sheets);
@@ -658,6 +714,142 @@ mod tests {
         let error =
             load_workbook_from_bytes(b"not a zip".to_vec(), LoadOptions::default()).unwrap_err();
         assert!(matches!(error, Error::InvalidFile(_)));
+    }
+
+    /// A workbook part that is not called `xl/workbook.xml`, named only by the package
+    /// relationships. openpyxl's own `tests/data/reader/nonstandard_workbook_name.xlsx` is
+    /// exactly this file and openpyxl reads it; insisting on the conventional name rejects a
+    /// valid package.
+    #[test]
+    fn workbook_part_is_found_through_the_package_relationships() {
+        use std::io::Write;
+
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        {
+            let options = zip::write::SimpleFileOptions::default();
+            let part = |archive: &mut zip::ZipWriter<Cursor<Vec<u8>>>, name: &str, body: &str| {
+                archive.start_file(name, options).unwrap();
+                archive.write_all(body.as_bytes()).unwrap();
+            };
+            part(
+                &mut archive,
+                "[Content_Types].xml",
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Override PartName="/xl/workbook10.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#,
+            );
+            part(
+                &mut archive,
+                "_rels/.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook10.xml"/>
+</Relationships>"#,
+            );
+            part(
+                &mut archive,
+                "xl/workbook10.xml",
+                r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Renamed" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+            );
+            part(
+                &mut archive,
+                "xl/_rels/workbook10.xml.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#,
+            );
+            part(
+                &mut archive,
+                "xl/worksheets/sheet1.xml",
+                r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData><row r="1"><c r="A1"><v>42</v></c></row></sheetData></worksheet>"#,
+            );
+        }
+        let bytes = archive.finish().unwrap().into_inner();
+
+        let workbook = load_workbook_from_bytes(bytes, LoadOptions::default())
+            .expect("a valid package whose workbook is not xl/workbook.xml should load");
+        assert_eq!(workbook.get_sheet_names(), vec!["Renamed".to_string()]);
+        assert_eq!(
+            workbook
+                .get_sheet_by_name("Renamed")
+                .unwrap()
+                .cell_value("A1")
+                .unwrap(),
+            crate::cell::CellValue::Number(42.0)
+        );
+    }
+
+    /// A relationship pointing at a part that is not in the archive is not a workbook, so the
+    /// relationship must not be trusted over a plainly-named part that is really there.
+    #[test]
+    fn a_dangling_office_document_relationship_does_not_shadow_the_real_part() {
+        use std::io::Write;
+
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        {
+            let options = zip::write::SimpleFileOptions::default();
+            archive.start_file("[Content_Types].xml", options).unwrap();
+            archive
+                .write_all(
+                    br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"#,
+                )
+                .unwrap();
+            archive.start_file("_rels/.rels", options).unwrap();
+            archive.write_all(
+                br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/missing.xml"/>
+</Relationships>"#,
+            )
+            .unwrap();
+            archive.start_file("xl/workbook.xml", options).unwrap();
+            archive
+                .write_all(
+                    br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Real" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+                )
+                .unwrap();
+            archive
+                .start_file("xl/_rels/workbook.xml.rels", options)
+                .unwrap();
+            archive
+                .write_all(
+                    br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#,
+                )
+                .unwrap();
+            archive
+                .start_file("xl/worksheets/sheet1.xml", options)
+                .unwrap();
+            archive
+                .write_all(
+                    br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>"#,
+                )
+                .unwrap();
+        }
+        let bytes = archive.finish().unwrap().into_inner();
+
+        // The dangling `xl/missing.xml` must be ignored, and the plainly-named workbook used:
+        // the sheet and its value coming back is what proves which part was read.
+        let workbook = load_workbook_from_bytes(bytes, LoadOptions::default())
+            .expect("a plainly-named workbook should win over a dangling relationship");
+        assert_eq!(workbook.get_sheet_names(), vec!["Real".to_string()]);
+        assert_eq!(
+            workbook
+                .get_sheet_by_name("Real")
+                .unwrap()
+                .cell_value("A1")
+                .unwrap(),
+            crate::cell::CellValue::Number(7.0)
+        );
     }
 
     #[test]
