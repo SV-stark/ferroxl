@@ -22,14 +22,22 @@ SOURCES = sorted((ROOT / "crates" / "ferroxl" / "src").rglob("*.rs"))
 def undoc(text: str) -> str:
     """Strip what only differs between a README block and a doc comment.
 
-    A README fence may say ```rust where a doctest says ```no_run, a doc comment carries
-    a `//!` prefix, and rustdoc hides a line from the rendered docs behind `# `. None of
-    that is part of the example.
+    A README fence may say ```rust where a doctest says ```no_run, a doc comment carries a
+    `//!` or `///` prefix and whatever indent it sits at, and rustdoc hides a line from the
+    rendered docs behind `# `. None of that is part of the example.
     """
     lines = []
     for line in text.splitlines():
-        if line.startswith("//!"):
-            line = line[3:]
+        stripped = line.lstrip()
+        if stripped.startswith(("//! ", "//!")):
+            line = stripped[3:]
+            if line.startswith(" "):
+                line = line[1:]
+        elif stripped.startswith("///"):
+            # An indented doc comment, which is what a doctest inside an `impl` block has.
+            # `///` with nothing after it is a blank line, and the indent is not part of
+            # the example either.
+            line = stripped[3:]
             if line.startswith(" "):
                 line = line[1:]
         if line.startswith("# "):

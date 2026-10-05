@@ -1,0 +1,12 @@
+# The reference implementation these harnesses compare against.
+#
+# Pinned exactly, on purpose. A version range means a new openpyxl release can turn a green
+# build red for reasons that have nothing to do with the commit under test, and -- worse --
+# can turn it green again after silently changing behaviour nobody re-examined. The version
+# is the one PARITY.md's figures were measured against; changing it means re-running
+# `tools/parity.py` and updating that document too.
+#
+# Pillow is required because openpyxl's `find_images` drops every image without it, which
+# would make an image regression invisible.
+openpyxl==3.1.5
+Pillow>=10.0
