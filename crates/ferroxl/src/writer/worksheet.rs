@@ -11,7 +11,7 @@ use crate::cell::utils::{column_index_from_string, coordinate_from_string, get_c
 use crate::exceptions::Result;
 use crate::formatting::RULE_ATTRIBUTES;
 use crate::worksheet::filters::SortCondition;
-use crate::worksheet::Worksheet;
+use crate::worksheet::{ColumnDimension, RowDimension, Worksheet};
 use crate::writer::styles::{build_style_tables, StyleId, StyleTables};
 use crate::xml::constants::{COMMENTS_NS, PKG_REL_NS, REL_NS, SHEET_MAIN_NS, VML_NS};
 use crate::xml::functions::{fromstring, Element, XmlWriter};
@@ -301,8 +301,16 @@ fn write_cols(
     if worksheet.column_dimensions.is_empty() {
         return Ok(());
     }
+    // `<col>` elements come out in ascending column order, which is how Excel and openpyxl
+    // both write them. The map is keyed by letters and `"Z"` sorts before `"AA"`, so the
+    // entries have to be ordered by column number rather than by key. An unparseable key
+    // sorts last and is reported by the `column_index_from_string` call below, which is
+    // where the error belongs.
+    let mut ordered: Vec<(&String, &ColumnDimension)> =
+        worksheet.column_dimensions.iter().collect();
+    ordered.sort_by_key(|(_, dimension)| dimension.column_index().unwrap_or(u32::from(u16::MAX)));
     doc.start_tag("cols", [] as [(&str, &str); 0]);
-    for (letters, dimension) in &worksheet.column_dimensions {
+    for (letters, dimension) in ordered {
         let col_index = column_index_from_string(letters)?;
         let mut attributes: Vec<(String, String)> = vec![
             ("min".to_string(), col_index.to_string()),
@@ -390,7 +398,17 @@ fn write_sheet_rows(
     style_tables: &StyleTables,
 ) -> Result<()> {
     let max_column = worksheet.highest_column();
-    for (row_index, cells) in group_rows(worksheet) {
+    let mut by_row: BTreeMap<u32, Vec<&Cell>> = group_rows(worksheet).into_iter().collect();
+    // A row holding no cells still has to be written when it says something of its own: a
+    // height, a hidden flag, an outline level or a style. `<row>` is the only element any
+    // of those can live in, so a row present solely in `row_dimensions` would lose all of
+    // them on save. openpyxl keeps such a row, and so must this.
+    for (&index, dimension) in &worksheet.row_dimensions {
+        if !by_row.contains_key(&index) && row_says_something(worksheet, index, dimension) {
+            by_row.insert(index, Vec::new());
+        }
+    }
+    for (row_index, cells) in by_row {
         write_row(
             doc,
             row_index,
@@ -402,6 +420,19 @@ fn write_sheet_rows(
         )?;
     }
     Ok(())
+}
+
+/// Whether a row dimension carries anything worth writing.
+///
+/// A row dimension with nothing set is not worth a `<row>` element of its own: it would say
+/// nothing, and openpyxl does not write one. Only a difference from the defaults reaches
+/// the file.
+fn row_says_something(worksheet: &Worksheet, index: u32, dimension: &RowDimension) -> bool {
+    dimension.height > 0.0
+        || !dimension.visible
+        || dimension.outline_level > 0
+        || dimension.collapsed
+        || worksheet.has_style(&index.to_string())
 }
 
 /// Write one `<row>` element and the cells in it.
@@ -418,7 +449,7 @@ pub fn write_row(
         .row_dimensions
         .get(&row_index)
         .cloned()
-        .unwrap_or_else(|| crate::worksheet::RowDimension::new(row_index));
+        .unwrap_or_else(|| RowDimension::new(row_index));
     let mut attributes: Vec<(String, String)> = vec![
         ("r".to_string(), row_index.to_string()),
         ("spans".to_string(), format!("1:{max_column}")),
@@ -861,6 +892,30 @@ mod tests {
         sheet
     }
 
+    /// The `r` of every `<row>` in `xml`, in the order they were written.
+    fn row_numbers(xml: &str) -> Vec<u32> {
+        numbers_after(xml, "<row r=\"")
+    }
+
+    /// The `min` of every `<col>` in `xml`, in the order they were written.
+    fn col_numbers(xml: &str) -> Vec<u32> {
+        numbers_after(xml, "<col min=\"")
+    }
+
+    /// The first number following each occurrence of `marker`, in order.
+    fn numbers_after(xml: &str, marker: &str) -> Vec<u32> {
+        xml.match_indices(marker)
+            .map(|(at, matched)| {
+                xml[at + matched.len()..]
+                    .split('"')
+                    .next()
+                    .expect("a quoted attribute value")
+                    .parse()
+                    .expect("a number")
+            })
+            .collect()
+    }
+
     #[test]
     fn writes_a_minimal_worksheet() {
         let sheet = new_sheet();
@@ -954,6 +1009,62 @@ mod tests {
         sheet.column_dimensions.insert("A".to_string(), dimension);
         let xml = write_one(&sheet);
         assert!(xml.contains("<col min=\"1\" max=\"1\" customWidth=\"1\" width=\"20\"></col>"));
+    }
+
+    #[test]
+    fn column_dimensions_are_written_in_ascending_order() {
+        // `"Z"` and `"AA"` sort the wrong way round as letters, so the order has to come
+        // from the column number. A `<col>` list that runs backwards is not what Excel
+        // writes and not what openpyxl reads back as canonical.
+        let mut sheet = new_sheet();
+        for letters in ["B", "Z", "AA", "C"] {
+            let mut dimension = ColumnDimension::new(letters);
+            dimension.width = 20.0;
+            sheet
+                .column_dimensions
+                .insert(letters.to_string(), dimension);
+        }
+        let xml = write_one(&sheet);
+        assert_eq!(col_numbers(&xml), vec![2, 3, 26, 27]);
+    }
+
+    #[test]
+    fn a_row_with_no_cells_keeps_its_height() {
+        // A height set on a row that holds nothing still has to reach the file. `<row>` is
+        // the only element a row height can live in, so a row that exists only in
+        // `row_dimensions` used to be dropped along with its height.
+        let mut sheet = new_sheet();
+        sheet.set("A1", "header").unwrap();
+        sheet
+            .row_dimensions
+            .insert(9, RowDimension::new(9).with_height(30.0));
+        let xml = write_one(&sheet);
+        assert!(xml.contains("<row r=\"9\" spans=\"1:1\" ht=\"30\" customHeight=\"1\"></row>"));
+    }
+
+    #[test]
+    fn a_row_dimension_with_nothing_set_is_not_written() {
+        // The other half of the rule: an empty row with no height, no hidden flag, no
+        // outline level and no style says nothing, so it gets no element of its own.
+        let mut sheet = new_sheet();
+        sheet.set("A1", "header").unwrap();
+        sheet.row_dimensions.insert(9, RowDimension::new(9));
+        let xml = write_one(&sheet);
+        assert!(!xml.contains("<row r=\"9\""));
+    }
+
+    #[test]
+    fn rows_are_written_in_ascending_order() {
+        // Both sources of a row -- one holding cells, one only a dimension -- have to come
+        // out merged and in order, because `<row>` is a sequence.
+        let mut sheet = new_sheet();
+        sheet.set("A5", "five").unwrap();
+        sheet.set("A1", "one").unwrap();
+        sheet
+            .row_dimensions
+            .insert(3, RowDimension::new(3).with_height(30.0));
+        let xml = write_one(&sheet);
+        assert_eq!(row_numbers(&xml), vec![1, 3, 5]);
     }
 
     #[test]
