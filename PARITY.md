@@ -406,16 +406,30 @@ element, so they move with the cells.
 
 ### 3. Charts and images are written but not read back
 
-openpyxl 3.1.5 writes chart and drawing parts but its reader does not parse them, so a
-reloaded workbook reports no charts and no images. ferroxl matches this rather than being
-half-compatible in a different direction.
+ferroxl writes chart and drawing parts but its reader does not parse them, so a reloaded
+workbook reports no charts and no images in the object model. The parts themselves survive --
+they are preserved rather than re-emitted -- but a chart cannot be *inspected* or *modified*
+after a load, only carried along.
 
 **Effect.** `worksheet.charts` and `worksheet.images` are empty after a load, even though
-the parts are in the file. Anything that depends on reading a chart back — inspecting an
-existing chart, preserving one across an edit — does not work, in ferroxl or in openpyxl 3.1.5.
+the parts are in the file, so there is nothing to reach when you want to adjust an existing
+chart's title or series range. Adding one and then editing anything else works, which is the
+case an agent is usually in.
 
-This one is a *parity* gap rather than a *capability* gap: ferroxl behaves exactly as the
-reference does.
+**This is a parity gap on capability, not on preservation, and the two were once confused.**
+An earlier version of this entry claimed openpyxl also fails to read charts back, so that
+ferroxl "behaves exactly as the reference does". It does not: openpyxl 3.1.5 loads a workbook,
+reports `charts=1 images=1`, and re-saves with both intact. What is true is only that neither
+implementation lets you *modify* a chart through a round trip.
+
+The confusion mattered, because it hid a much worse bug. Treating the drawing part as
+writer-owned meant that on the next save - any edit at all, since the MCP server saves per
+call - the writer emitted no drawing while the sheet's relationship to it was preserved. The
+package was left with a relationship naming a part that was no longer in it, and no reader
+could open the file. `add_chart` and `add_image` were effectively single-shot: they worked, and
+the next tool call destroyed the workbook. Editing a real file that already had images in it
+took one `set_cell` to render it unopenable. Fixed in 0.1.10; `tools/mcp_real_files.py` now
+writes to the workbook *after* adding a drawing, which is the check that would have caught it.
 
 ### Resolved
 
@@ -807,7 +821,7 @@ through the API: every one of these passed every unit test.
 ferroxl's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
-The suite is 739 tests - 604 in the library, 123 in the MCP server and 12 doctests - and
+The suite is 756 tests - 618 in the library, 123 in the MCP server and 12 doctests - and
 `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check` and
 `RUSTDOCFLAGS=-D warnings cargo doc` are all clean.
 

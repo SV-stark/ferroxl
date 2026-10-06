@@ -100,12 +100,32 @@ impl HeaderFooterItem {
     }
 
     /// Parse a section from its `&`-delimited form.
+    ///
+    /// The fields are `&`-delimited and start with the section's marker, so everything after the
+    /// first re-joins with a leading `&` -- `&L` then `P` then ` report` is the text `&P report`.
+    ///
+    /// The first field is not always a bare marker. When the marker was glued to its text --
+    /// `&Lleft`, which is the shape openpyxl and Excel both write -- the marker is a prefix of
+    /// that field rather than the whole of it, and its remainder is the start of the text. That
+    /// field is the only one whose text arrives without a separator in front of it, because the
+    /// split it came from never put one there.
     pub fn set_from_header_string(&mut self, item_array: &[String]) {
         let mut text_array: Vec<String> = Vec::new();
-        for item in item_array.iter().skip(1) {
+        for (position, raw) in item_array.iter().enumerate() {
+            // The marker's own field, with any text glued to it taken off the front.
+            let (item, separated) = if position == 0 {
+                match raw.strip_prefix(self.item_type.as_str()) {
+                    Some(rest) => (rest.to_string(), false),
+                    None => continue,
+                }
+            } else {
+                (raw.clone(), true)
+            };
             if item.is_empty() {
                 continue;
             }
+
+            // Text already started, so this field is a code and keeps its `&`.
             if !text_array.is_empty() {
                 text_array.push(format!("&{item}"));
             } else if let Some(stripped) = item.strip_prefix('"') {
@@ -119,8 +139,11 @@ impl HeaderFooterItem {
                 }
             } else if let Ok(size) = item.parse::<i64>() {
                 self.font_size = Some(size);
-            } else {
+            } else if separated {
                 text_array.push(format!("&{item}"));
+            } else {
+                // Text that arrived glued to the marker, which never had a `&` in front of it.
+                text_array.push(item);
             }
         }
         self.text = Some(text_array.concat());
@@ -199,15 +222,14 @@ impl HeaderFooter {
     pub fn set_header(&mut self, item: &str) {
         let items = split_header(item);
         let (left, center, right) = section_bounds(&items);
-        if let Some((start, end)) = left {
-            self.left_header.set_from_header_string(&items[start..end]);
+        if let Some(fields) = left {
+            self.left_header.set_from_header_string(&fields);
         }
-        if let Some((start, end)) = center {
-            self.center_header
-                .set_from_header_string(&items[start..end]);
+        if let Some(fields) = center {
+            self.center_header.set_from_header_string(&fields);
         }
-        if let Some((start, end)) = right {
-            self.right_header.set_from_header_string(&items[start..end]);
+        if let Some(fields) = right {
+            self.right_header.set_from_header_string(&fields);
         }
     }
 
@@ -215,15 +237,14 @@ impl HeaderFooter {
     pub fn set_footer(&mut self, item: &str) {
         let items = split_header(item);
         let (left, center, right) = section_bounds(&items);
-        if let Some((start, end)) = left {
-            self.left_footer.set_from_header_string(&items[start..end]);
+        if let Some(fields) = left {
+            self.left_footer.set_from_header_string(&fields);
         }
-        if let Some((start, end)) = center {
-            self.center_footer
-                .set_from_header_string(&items[start..end]);
+        if let Some(fields) = center {
+            self.center_footer.set_from_header_string(&fields);
         }
-        if let Some((start, end)) = right {
-            self.right_footer.set_from_header_string(&items[start..end]);
+        if let Some(fields) = right {
+            self.right_footer.set_from_header_string(&fields);
         }
     }
 }
@@ -241,40 +262,67 @@ fn split_header(item: &str) -> Vec<String> {
         .collect()
 }
 
-/// Where each of the `L`, `C` and `R` sections starts and ends, as `(start, end)` pairs
-/// into the split header or footer string. A section that is not present is `None`.
+/// The `&`-delimited fields of each of the `L`, `C` and `R` sections, in that order.
+///
+/// Each field list starts with the section's own marker, because
+/// [`HeaderFooterItem::set_from_header_string`] skips the first entry as the marker and reads the
+/// rest. A section that is not present is `None`.
 pub type SectionSpans = (
-    Option<(usize, usize)>,
-    Option<(usize, usize)>,
-    Option<(usize, usize)>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
+    Option<Vec<String>>,
 );
 
-/// Locate the `L`, `C` and `R` section boundaries as `(start, end)` pairs.
+/// Split a header or footer string into the three sections' fields.
 ///
-/// Only the **first** occurrence of each marker is honoured, matching `list.index`, which
-/// means a marker inside a section's text is treated as the start of that section.
+/// openpyxl's `_split_string` matches each marker with a regex that glues the section's text to it
+/// -- `(&L(?P<left>.+?))?` -- so `&Lleft` is a left section carrying `left`, not a stray field named
+/// `Lleft`. Comparing whole `&`-delimited fields gets that wrong, and it is not an edge case: this
+/// is the shape openpyxl and Excel both *write*, so a header set through either of them read back
+/// as nothing and was dropped on the next save.
 fn section_bounds(items: &[String]) -> SectionSpans {
-    let find = |marker: &str| items.iter().position(|item| item == marker);
+    // A marker is a field that *starts* with it; its text is what follows.
+    let find = |marker: &str| items.iter().position(|item| item.starts_with(marker));
     let left = find(HeaderFooterItem::LEFT);
     let center = find(HeaderFooterItem::CENTER);
     let right = find(HeaderFooterItem::RIGHT);
 
-    let slice = |start: usize, stops: &[Option<usize>]| -> (usize, usize) {
-        let end = stops
+    // The three positions in the order openpyxl's regex lays them out. A section runs from its
+    // marker to the start of the next one, which is what the non-greedy `.+?` does.
+    let order = [
+        (HeaderFooterItem::LEFT, left),
+        (HeaderFooterItem::CENTER, center),
+        (HeaderFooterItem::RIGHT, right),
+    ];
+
+    let mut spans: SectionSpans = (None, None, None);
+    for (position, (marker, at)) in order.into_iter().enumerate() {
+        let Some(at) = at else {
+            continue;
+        };
+        let next = order[position + 1..]
             .iter()
-            .flatten()
-            .copied()
-            .filter(|stop| *stop > start)
+            .filter_map(|(_, other)| *other)
+            .filter(|stop| *stop > at)
             .min()
             .unwrap_or(items.len());
-        (start, end)
-    };
 
-    (
-        left.map(|s| slice(s, &[center, right])),
-        center.map(|s| slice(s, &[right])),
-        right.map(|s| (s, items.len())),
-    )
+        // The marker's own field is kept whole, so the parser can tell a bare marker from one with
+        // its text glued to it. The fields after it carry the font name, colour and size codes.
+        let mut fields = vec![items[at].clone()];
+        if at + 1 < next {
+            fields.extend_from_slice(&items[at + 1..next]);
+        }
+        debug_assert!(fields[0].starts_with(marker));
+
+        let slot = match marker {
+            HeaderFooterItem::LEFT => &mut spans.0,
+            HeaderFooterItem::CENTER => &mut spans.1,
+            _ => &mut spans.2,
+        };
+        *slot = Some(fields);
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -333,13 +381,64 @@ mod tests {
     }
 
     #[test]
-    fn a_marker_glued_to_its_text_is_not_a_section() {
-        // `&Lleft` splits into `["", "Lleft"]`, so no `L` field exists and nothing is
-        // recorded. This is openpyxl's behaviour and is reproduced deliberately.
+    fn a_marker_glued_to_its_text_is_a_section() {
+        // `&Lleft` splits into `["", "Lleft"]`, so the marker is the *start* of a field rather
+        // than a field of its own. openpyxl's `_split_string` matches it that way -- the regex is
+        // `(&L(?P<left>.+?))?` -- and this is the shape both openpyxl and Excel write, so treating
+        // it as an unknown field dropped every header on the next save.
         let mut hf = HeaderFooter::new();
         hf.set_header("&Lleft");
-        assert!(!hf.has_header());
-        assert_eq!(hf.header_string(), "");
+        assert_eq!(hf.left_header.text.as_deref(), Some("left"));
+        assert!(hf.has_header());
+    }
+
+    #[test]
+    fn a_glued_marker_keeps_the_codes_that_follow_it() {
+        // The shape the writer itself emits: marker, font name, colour, then the text.
+        let mut hf = HeaderFooter::new();
+        hf.set_header("&C&\"Calibri,Regular\"&K000000Regional report");
+        assert_eq!(hf.center_header.text.as_deref(), Some("Regional report"));
+        assert_eq!(hf.center_header.font_name, "Calibri,Regular");
+        assert_eq!(hf.center_header.font_color, "000000");
+    }
+
+    #[test]
+    fn three_glued_sections_are_all_found() {
+        let mut hf = HeaderFooter::new();
+        hf.set_header("&Lleft text&Cmiddle&Rright");
+        assert_eq!(hf.left_header.text.as_deref(), Some("left text"));
+        assert_eq!(hf.center_header.text.as_deref(), Some("middle"));
+        assert_eq!(hf.right_header.text.as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn a_glued_footer_with_page_numbers_round_trips() {
+        let mut hf = HeaderFooter::new();
+        hf.set_footer("&RPage &P of &N");
+        assert_eq!(hf.right_footer.text.as_deref(), Some("Page &P of &N"));
+        assert!(hf.footer_string().contains("&P"));
+        assert!(hf.footer_string().contains("&N"));
+    }
+
+    #[test]
+    fn the_writers_own_output_reads_back() {
+        // The writer emits marker, font name, colour, text. Parsing that back has to keep the
+        // text, or a header survives one save and is gone by the second -- which is how the
+        // entity-decoding defect that ate every `&` first showed itself.
+        let rendered = HeaderFooterItem {
+            text: Some("Regional report".to_string()),
+            ..HeaderFooterItem::new(HeaderFooterItem::CENTER)
+        }
+        .to_header_string();
+        let mut hf = HeaderFooter::new();
+        hf.set_header(&rendered);
+        assert_eq!(hf.center_header.text.as_deref(), Some("Regional report"));
+
+        // And the second pass over that must be stable, which is the round trip that was failing.
+        let mut again = HeaderFooter::new();
+        again.set_header(&hf.header_string());
+        assert_eq!(again.center_header.text.as_deref(), Some("Regional report"));
+        assert!(again.has_header());
     }
 
     #[test]

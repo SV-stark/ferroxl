@@ -274,6 +274,29 @@ pub fn write_parts(
         }
         write_entry(archive, path, data)?;
     }
+    write_preserved_rels(archive, preserved)
+}
+
+/// Write the relationships of every preserved part that needs one.
+///
+/// A preserved part's `.rels` is parsed at load time rather than kept verbatim, so it has to be
+/// rendered here. Only parts that are themselves preserved get one: the `.rels` the writer owns
+/// are merged into its own output instead. Without this a preserved drawing is a set of anchors
+/// pointing at nothing -- the part survives, and nothing says which chart or image it holds.
+fn write_preserved_rels(
+    archive: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+    preserved: &PreservedParts,
+) -> crate::exceptions::Result<()> {
+    for rels_path in preserved.all_relationships().keys() {
+        let owner = crate::reader::preserved::part_for_rels(rels_path);
+        if preserved.part(&owner).is_none() {
+            continue;
+        }
+        let Some(document) = rels_from_preserved(preserved, rels_path) else {
+            continue;
+        };
+        write_entry(archive, rels_path, document.as_bytes())?;
+    }
     Ok(())
 }
 

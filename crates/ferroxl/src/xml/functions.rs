@@ -519,6 +519,34 @@ pub fn conditional_element<'a>(
 ///
 /// Element and attribute names are normalised to ElementTree's `{ns}local` form so the
 /// same lookup helpers work for both.
+/// Append a chunk of text to the element being parsed.
+///
+/// The reader delivers one element's content as a sequence of events -- a run of text, then an
+/// entity reference, then more text -- so the text is accumulated here rather than assigned.
+fn append_text(top: Option<&mut Element>, chunk: &str) {
+    let Some(top) = top else {
+        return;
+    };
+    match top.text.as_mut() {
+        Some(existing) => existing.push_str(chunk),
+        None => top.text = Some(chunk.to_string()),
+    }
+}
+
+/// Resolve `&#NN;` or `&#xNN;` to the character it names.
+///
+/// Returns `None` for anything else, which covers both a malformed reference and a plain name:
+/// the caller decides what to do, because a declared entity and a character reference are the two
+/// cases XML allows and the rest are not valid content.
+fn decode_character_reference(text: &str) -> Option<String> {
+    let digits = text.strip_prefix('#')?;
+    let code = match digits.strip_prefix(['x', 'X']) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+        None => digits.parse::<u32>().ok()?,
+    };
+    char::from_u32(code).map(String::from)
+}
+
 /// Split an ElementTree path into its last ancestor step and its final tag.
 ///
 /// A namespace URI inside a `{ns}tag` step contains slashes, so only a slash outside
@@ -576,28 +604,44 @@ pub fn fromstring(data: &[u8]) -> Result<Element> {
                 }
             }
             Ok(Event::Text(text)) => {
-                if let Some(top) = stack.last_mut() {
-                    // The content is still entity-encoded, so the escapes are resolved.
-                    let decoded = quick_xml::escape::unescape(&text)
-                        .map_err(|e| Error::Xml(e.to_string()))?;
-                    match top.text.as_mut() {
-                        Some(existing) => existing.push_str(&decoded),
-                        None => top.text = Some(decoded.into_owned()),
-                    }
-                }
+                // `&amp;` and friends arrive as their own event rather than inline, so this
+                // text has no escapes left in it. Anything still encoded is an escape the
+                // reader did not report separately, and resolving it is a no-op otherwise.
+                let decoded =
+                    quick_xml::escape::unescape(&text).map_err(|e| Error::Xml(e.to_string()))?;
+                append_text(stack.last_mut(), &decoded);
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                // An entity reference in element content, which the reader hands over separately
+                // from the text around it. The five XML entities are resolved here and a numeric
+                // character reference is read as one; anything else is an undeclared entity,
+                // which XML forbids in content, so it is an error rather than a silent omission.
+                let name = reference.as_ref();
+                let resolved = match name {
+                    "amp" => "&".to_string(),
+                    "lt" => "<".to_string(),
+                    "gt" => ">".to_string(),
+                    "quot" => "\"".to_string(),
+                    "apos" => "'".to_string(),
+                    _ => match decode_character_reference(name) {
+                        Some(character) => character,
+                        None => {
+                            return Err(Error::Xml(format!(
+                                "undefined entity reference &{name}; in content this is not \
+                                 valid XML"
+                            )))
+                        }
+                    },
+                };
+                append_text(stack.last_mut(), &resolved);
             }
             Ok(Event::CData(cdata)) => {
-                if let Some(top) = stack.last_mut() {
-                    // CDATA content is literal, so it is copied verbatim.
-                    let decoded = cdata
-                        .escape()
-                        .map_err(|e| Error::Xml(e.to_string()))?
-                        .to_string();
-                    match top.text.as_mut() {
-                        Some(existing) => existing.push_str(&decoded),
-                        None => top.text = Some(decoded),
-                    }
-                }
+                // CDATA content is literal, so it is copied verbatim.
+                let decoded = cdata
+                    .escape()
+                    .map_err(|e| Error::Xml(e.to_string()))?
+                    .to_string();
+                append_text(stack.last_mut(), &decoded);
             }
             Ok(Event::Eof) => break,
             Ok(_) => {}
@@ -855,6 +899,65 @@ mod tests {
             doc.as_str(),
             "<t a=\"x&quot;&amp;&lt;&gt;\">a&lt;b&amp;c&gt;d</t>"
         );
+    }
+
+    #[test]
+    fn an_inline_string_is_read_from_is_not_from_v() {
+        // openpyxl writes a string inline -- `<is><t>` -- when the workbook has no shared
+        // string table, which is the default for a file it has just created. Nothing else
+        // supplies the value, so a cell in this form used to read back empty.
+        let cell = fromstring(br#"<c r="A1" t="inlineStr"><is><t>plain &amp; simple</t></is></c>"#)
+            .expect("parses");
+        let text = cell
+            .find("is")
+            .and_then(|is| is.find("t"))
+            .and_then(|t| t.text.clone());
+        assert_eq!(
+            text.as_deref(),
+            Some("plain & simple"),
+            "an inline string carries its text in <is><t>, not in <v>"
+        );
+    }
+
+    #[test]
+    fn an_entity_reference_in_text_is_resolved_rather_than_dropped() {
+        // The reader reports `&amp;` as its own `GeneralRef` event, so a parser that handles only
+        // `Text` loses it. That is not a header/footer problem: it silently deleted every `&`, `<`,
+        // `>`, `"` and `'` from every element's text, in every part of every workbook.
+        for (xml, expected) in [
+            ("<t>a &amp; b</t>", "a & b"),
+            ("<t>Page &amp;P of &amp;N</t>", "Page &P of &N"),
+            ("<t>&lt;tag&gt;</t>", "<tag>"),
+            ("<t>&quot;quoted&quot;</t>", "\"quoted\""),
+            ("<t>it&apos;s</t>", "it's"),
+            ("<t>&#65;&#66;</t>", "AB"),
+            ("<t>&#x41;&#x42;</t>", "AB"),
+            // An escape in the middle of a longer run, where the chunks have to be joined.
+            ("<t>Ben &amp; Jerry&apos;s</t>", "Ben & Jerry's"),
+        ] {
+            let element = fromstring(xml.as_bytes()).expect("parses");
+            assert_eq!(
+                element.text.as_deref(),
+                Some(expected),
+                "{xml} should read back as {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entity_reference_in_an_attribute_is_kept() {
+        // Attributes are read by their own parser, so this pins the half that already worked --
+        // the bug was in element content.
+        let element = fromstring(br#"<t name="a &amp; b"/>"#).expect("parses");
+        assert_eq!(element.get("name"), Some("a & b"));
+    }
+
+    #[test]
+    fn an_undeclared_entity_is_an_error_rather_than_a_silent_omission() {
+        // XML allows only the five entities and character references in content. A name it does
+        // not know is not something to skip quietly: that is what turned this into silent data
+        // loss in the first place.
+        assert!(fromstring(b"<t>&nbsp;</t>").is_err());
     }
 
     #[test]

@@ -564,6 +564,15 @@ pub fn write_row(
                     }
                 }
             }
+            // An inline string keeps its text in `<is><t>`, not in `<v>`. Writing it into `<v>` is what
+            // left a loaded workbook's text unreadable: a reader that follows the `t`
+            // attribute looks in `<is>` and finds nothing, so the cell reads back empty.
+            DataType::InlineString => {
+                let text = value.as_text().unwrap_or_default().to_string();
+                doc.start_tag("is", [] as [(&str, &str); 0]);
+                doc.tag("t", [] as [(&str, &str); 0], Some(&text));
+                doc.end_tag("is");
+            }
             DataType::Numeric => match value {
                 CellValue::Number(number) => {
                     doc.tag(

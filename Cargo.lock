@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "ferroxl"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "chrono",
  "png",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "ferroxl-mcp"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "chrono",
  "ferroxl",

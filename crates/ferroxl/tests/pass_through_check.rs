@@ -407,3 +407,155 @@ fn the_original_file_was_actually_missing_what_this_feature_adds() {
     assert!(names.contains(&"xl/drawings/vmlDrawing1.vml".to_string()));
     assert!(!names.contains(&"xl/charts/chart1.xml".to_string()));
 }
+
+// -- A chart, written and then re-written -------------------------------------------------
+
+/// A workbook carrying a chart, which is the case that used to destroy itself.
+///
+/// ferroxl writes a chart but does not read one back, so the second save has no chart in the
+/// model and produces no drawing for it. The sheet's `<drawing>` element and its relationship
+/// were preserved regardless, which left the relationship naming a part that was no longer in
+/// the package -- a file no reader can open. Any edit at all was enough to reach it.
+fn workbook_with_a_chart() -> Vec<u8> {
+    use ferroxl::charts::reference::{Reference, ReferenceDataType};
+    use ferroxl::charts::{BarChart, Series};
+
+    let mut workbook = Workbook::new();
+    let sheet = workbook.active_sheet_mut().expect("a sheet");
+    sheet
+        .set("A1", ferroxl::CellValue::text("Units"))
+        .expect("cell");
+    sheet
+        .set("A2", ferroxl::CellValue::number(10.0))
+        .expect("cell");
+    let mut chart = BarChart::new().into_chart();
+    chart.add_series(Series::new(
+        Reference::new(
+            "Sheet1",
+            (1, 0),
+            Some((1, 0)),
+            Some(ReferenceDataType::Numeric),
+            None,
+        )
+        .expect("a reference"),
+    ));
+    sheet.charts.push(chart);
+    workbook.to_bytes().expect("saved")
+}
+
+#[test]
+fn a_chart_survives_a_round_trip() {
+    let names = part_names(&round_trip(workbook_with_a_chart()));
+    for part in [
+        "xl/drawings/drawing1.xml",
+        "xl/drawings/_rels/drawing1.xml.rels",
+        "xl/charts/chart1.xml",
+    ] {
+        assert!(
+            names.contains(&part.to_string()),
+            "{part} was deleted; the file now has {names:?}"
+        );
+    }
+}
+
+#[test]
+fn a_chart_survives_an_unrelated_edit() {
+    // The whole failure: a second save that touches nothing about the chart.
+    let mut workbook =
+        load_workbook_from_bytes(workbook_with_a_chart(), Default::default()).expect("loadable");
+    workbook
+        .active_sheet_mut()
+        .expect("a sheet")
+        .set("Z9", ferroxl::CellValue::number(1.0))
+        .expect("cell");
+    let names = part_names(&workbook.to_bytes().expect("saved"));
+
+    for part in [
+        "xl/drawings/drawing1.xml",
+        "xl/drawings/_rels/drawing1.xml.rels",
+        "xl/charts/chart1.xml",
+    ] {
+        assert!(
+            names.contains(&part.to_string()),
+            "{part} was deleted by an unrelated edit; the file now has {names:?}"
+        );
+    }
+}
+
+#[test]
+fn nothing_in_a_workbook_with_a_chart_points_at_a_part_that_is_not_there() {
+    // The general form of the defect, and the assertion worth having: every relationship in the
+    // package has to name something that exists. A dangling one is what made the file unopenable,
+    // and checking each relationship says so directly rather than through a reader's stack trace.
+    let mut workbook =
+        load_workbook_from_bytes(workbook_with_a_chart(), Default::default()).expect("loadable");
+    workbook
+        .active_sheet_mut()
+        .expect("a sheet")
+        .set("Z9", ferroxl::CellValue::number(1.0))
+        .expect("cell");
+    let after = workbook.to_bytes().expect("saved");
+
+    let names = part_names(&after);
+    let mut archive = zip::ZipArchive::new(Cursor::new(after)).expect("a readable zip");
+    let rels: Vec<(String, String)> = (0..archive.len())
+        .filter_map(|index| {
+            let entry = archive.by_index(index).ok()?;
+            let name = entry.name().to_string();
+            if !name.ends_with(".rels") {
+                return None;
+            }
+            let mut text = String::new();
+            let mut entry = entry;
+            entry.read_to_string(&mut text).expect("utf-8");
+            Some((name, text))
+        })
+        .collect();
+
+    for (rels_path, text) in rels {
+        let owner_directory = if rels_path.starts_with("_rels/") {
+            // The package root. `_rels/.rels` describes the package, so its targets are already
+            // relative to the root and there is no containing directory to add.
+            String::new()
+        } else {
+            match ferroxl::reader::preserved::part_for_rels(&rels_path).rsplit_once('/') {
+                Some((directory, _)) => directory.to_string(),
+                None => String::new(),
+            }
+        };
+        for target in text
+            .split("Target=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap_or_default().to_string())
+            .filter(|target| !target.starts_with("http") && !target.starts_with("mailto:"))
+        {
+            let resolved = if target.starts_with('/') {
+                // A package-absolute target needs no resolving.
+                target.trim_start_matches('/').to_string()
+            } else {
+                // Otherwise the target is relative to the directory of the part that declares
+                // it, so `../drawings/drawing1.xml` from `xl/worksheets/_rels/` is
+                // `xl/drawings/drawing1.xml`.
+                let mut segments: Vec<&str> = if owner_directory.is_empty() {
+                    Vec::new()
+                } else {
+                    owner_directory.split('/').collect()
+                };
+                for segment in target.split('/') {
+                    match segment {
+                        ".." => {
+                            segments.pop();
+                        }
+                        "." => {}
+                        part => segments.push(part),
+                    }
+                }
+                segments.join("/")
+            };
+            assert!(
+                names.contains(&resolved),
+                "{rels_path} names {resolved}, which is not in the package {names:?}"
+            );
+        }
+    }
+}

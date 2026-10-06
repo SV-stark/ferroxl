@@ -60,17 +60,46 @@ struct PartIds {
 }
 
 impl PartIds {
-    /// Counters start at 1, because part names in the package are 1-based.
-    fn first() -> Self {
+    /// Counters start past whatever the source already occupies.
+    ///
+    /// Counters normally start at 1, because part names in the package are 1-based. A chart
+    /// or an image is the exception: those are preserved rather than re-emitted, because
+    /// ferroxl does not read them back, so `drawing1.xml` may already be in the preserved set.
+    /// Allocating from 1 regardless would put the writer's own part on top of it, and the
+    /// preserved part is written last -- so the new chart or image would disappear instead of
+    /// the old one.
+    fn first(preserved: &crate::workbook::preserved::PreservedParts) -> Self {
         PartIds {
-            drawing_id: 1,
-            chart_id: 1,
-            image_id: 1,
+            drawing_id: next_free_index(preserved, "xl/drawings/drawing"),
+            chart_id: next_free_index(preserved, "xl/charts/chart"),
+            image_id: next_free_index(preserved, "xl/media/image"),
             shape_id: 1,
-            comments_id: 1,
-            table_id: 1,
+            comments_id: next_free_index(preserved, "xl/drawings/commentsDrawing"),
+            table_id: next_free_index(preserved, "xl/tables/table"),
         }
     }
+}
+
+/// One past the highest `<prefix><n>.<extension>` the preserved set already occupies.
+///
+/// A prefix naming nothing preserved gives 1, which is where the counter used to start.
+fn next_free_index(preserved: &crate::workbook::preserved::PreservedParts, prefix: &str) -> u32 {
+    let mut highest = 0u32;
+    for path in preserved.parts().keys() {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        let Some((digits, _extension)) = rest.split_once('.') else {
+            continue;
+        };
+        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(index) = digits.parse::<u32>() {
+            highest = highest.max(index);
+        }
+    }
+    highest.saturating_add(1)
 }
 
 impl ExcelWriter {
@@ -186,7 +215,7 @@ impl ExcelWriter {
     }
 
     fn write_worksheets(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
-        let mut ids = PartIds::first();
+        let mut ids = PartIds::first(&self.workbook.preserved);
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
             let xml = self.sheet_xml(sheet, index)?;
             writestr(
@@ -243,7 +272,7 @@ impl ExcelWriter {
 
     /// Write every worksheet, streaming each sheet's rows into its zip entry.
     fn write_sheets_dump(&self, archive: &mut ZipWriter<Cursor<Vec<u8>>>) -> Result<()> {
-        let mut ids = PartIds::first();
+        let mut ids = PartIds::first(&self.workbook.preserved);
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
             let name = format!("{PACKAGE_WORKSHEETS}/sheet{}.xml", index + 1);
             archive

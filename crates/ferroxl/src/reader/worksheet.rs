@@ -275,7 +275,18 @@ impl WorksheetParser<'_, '_> {
             .and_then(DataType::from_str)
             .unwrap_or(DataType::Numeric);
 
-        if raw_value.is_empty() && formula.is_none() {
+        // An inline string carries its text in `<is><t>` rather than in `<v>`, which is where
+        // openpyxl puts a string when the workbook has no shared string table. Nothing else
+        // supplies the value, so a cell in this form read back as empty.
+        let inline = match data_type {
+            DataType::InlineString => node
+                .find(self.tag("is"))
+                .map(|is| is.find_text(self.tag("t"), ""))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+
+        if raw_value.is_empty() && inline.is_empty() && formula.is_none() {
             // An empty styled cell still needs to exist.
             self.worksheet.cell_mut(coordinate)?;
             return Ok(());
@@ -292,6 +303,9 @@ impl WorksheetParser<'_, '_> {
             ),
             DataType::Bool => CellValue::Bool(raw_value.trim() == "1"),
             DataType::Error => CellValue::Error(raw_value.trim().to_string()),
+            // The text is in `<is><t>`, not `<v>`, so it is read from there. A cell with no
+            // `<t>` at all is empty rather than absent, which is what keeps it in the sheet.
+            DataType::InlineString => CellValue::text(inline),
             // A numeric `<v>` is stored as a number so it round-trips as one.
             _ => match raw_value.trim().parse::<f64>() {
                 Ok(number) => CellValue::Number(number),

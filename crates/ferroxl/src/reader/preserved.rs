@@ -47,35 +47,33 @@ fn is_indexed(path: &str, directory: &str, noun: &str) -> bool {
 
 /// Whether the writer produces `path`, and so must not also have it preserved.
 ///
-/// The rules mirror `ExcelWriter`. Paths it names by index -- worksheets, tables, charts,
-/// drawings, comments -- are recognised by shape rather than by a list that would drift as the
-/// writer gains parts. Everything else, including `vmlDrawing`, `pivotTables`, `slicers`,
-/// `threadedComments`, `ctrlProps`, `queryTables` and `customXml`, is preserved.
+/// The rules mirror `ExcelWriter`. Paths it names by index -- worksheets, tables, comments --
+/// are recognised by shape rather than by a list that would drift as the writer gains parts.
+/// Everything else, including `pivotTables`, `slicers`, `threadedComments`, `ctrlProps`,
+/// `queryTables` and `customXml`, is preserved.
+///
+/// Drawings, charts and media are the exception that matters, and they are preserved on
+/// purpose. ferroxl writes a chart or an image but does not read either back, so for a loaded
+/// workbook the writer produces no drawing at all -- while the sheet's `<drawing>` element and
+/// its relationship are preserved verbatim. Treating the drawing part as the writer's therefore
+/// deleted the only copy of it and left the relationship pointing at nothing, which is a file
+/// no reader can open. The writer allocates its part names past whatever is preserved, so the
+/// two never collide and both survive.
 pub fn is_writer_owned(path: &str) -> bool {
     if ALWAYS_WRITER_OWNED.contains(&path) || path == "docProps/core.xml" {
-        return true;
-    }
-    if path.starts_with("xl/media/") {
         return true;
     }
     for (directory, noun) in [
         ("xl/worksheets/", "sheet"),
         ("xl/tables/", "table"),
-        ("xl/charts/", "chart"),
-        ("xl/drawings/", "drawing"),
         ("xl/", "comments"),
     ] {
         if is_indexed(path, directory, noun) {
             return true;
         }
     }
-    // A chart's colour and style parts sit beside it under their own names, and a comment's VML
-    // sits beside the drawings.
-    if path.starts_with("xl/charts/")
-        && (path.contains("colors") || path.contains("style") || path.contains("userShapes"))
-    {
-        return true;
-    }
+    // A comment's VML sits beside the drawings and is re-emitted with the comments, which are
+    // read back. A `vmlDrawing` is somebody else's -- an ActiveX control -- and stays preserved.
     is_indexed(path, "xl/drawings/", "commentsDrawing")
 }
 
@@ -307,14 +305,29 @@ mod tests {
             "xl/worksheets/sheet12.xml",
             "xl/worksheets/_rels/sheet12.xml.rels",
             "xl/tables/table3.xml",
-            "xl/charts/chart7.xml",
-            "xl/drawings/drawing2.xml",
-            "xl/drawings/_rels/drawing2.xml.rels",
             "xl/drawings/commentsDrawing4.vml",
             "xl/comments3.xml",
-            "xl/media/image1.png",
         ] {
             assert!(is_writer_owned(path), "{path} should be the writer's");
+        }
+    }
+
+    #[test]
+    fn a_chart_and_a_drawing_are_preserved_rather_than_the_writers() {
+        // Charts and images are written but not read back, so a loaded workbook never produces
+        // a drawing of its own. Treating these as the writer's deleted the only copy and left
+        // the sheet's relationship pointing at a part that was no longer there -- a file no
+        // reader can open, reached by editing anything at all in a workbook that had a chart.
+        for path in [
+            "xl/charts/chart7.xml",
+            "xl/charts/_rels/chart7.xml.rels",
+            "xl/charts/colors1.xml",
+            "xl/charts/style1.xml",
+            "xl/drawings/drawing2.xml",
+            "xl/drawings/_rels/drawing2.xml.rels",
+            "xl/media/image1.png",
+        ] {
+            assert!(!is_writer_owned(path), "{path} should be preserved");
         }
     }
 

@@ -61,7 +61,7 @@ crates/
 
 ```toml
 [dependencies]
-ferroxl = "0.1.9"
+ferroxl = "0.1.10"
 ```
 
 Both crates are on crates.io — the [library](https://crates.io/crates/ferroxl) and the
@@ -95,7 +95,7 @@ The MCP server adds only `serde`, `serde_json`, `chrono` and `thiserror`.
 ```console
 $ git clone https://github.com/SV-stark/ferroxl
 $ cd ferroxl
-$ cargo test --workspace        # 735 tests
+$ cargo test --workspace        # 756 tests
 $ cargo run --example build_and_read
 wrote orders.xlsx
 sheets: ["Sheet1", "Orders"]
@@ -497,7 +497,7 @@ a tool that silently drops an argument is worse than one that refuses.
 
 ```console
 $ cargo build --workspace                  # build
-$ cargo test --workspace                   # 735 tests
+$ cargo test --workspace                   # 756 tests
 $ cargo nextest run --workspace            # the same tests, in parallel; this is what CI runs
 $ cargo clippy --workspace --all-targets -- -D warnings
 $ cargo fmt --all --check

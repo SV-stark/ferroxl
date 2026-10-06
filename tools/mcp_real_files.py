@@ -12,6 +12,7 @@ the loop.
     python tools/mcp_real_files.py
 """
 
+import os
 import re
 import shutil
 import sys
@@ -31,16 +32,20 @@ WORK = ROOT / "target" / "mcp_real_files"
 
 # Real workbooks, each the best honest example of the feature it is used for. Taken from
 # the openpyxl test corpus and from this repo, so they are files real software produced.
+# Where the openpyxl fixtures live. The upstream checkout is a sibling of this repository, which
+# is where CI puts it; override with FERROXL_OPENPYXL to point somewhere else.
+OPENPYXL = Path(os.environ.get("FERROXL_OPENPYXL") or ROOT.parent / "openpyxl")
+
 SOURCES = {
     "orders": ROOT / "orders.xlsx",
-    "sample": ROOT.parent / "openpyxl" / "openpyxl" / "reader" / "tests" / "data" / "sample.xlsx",
-    "styles": ROOT.parent / "openpyxl" / "openpyxl" / "reader" / "tests" / "data" / "complex-styles.xlsx",
-    "condfmt": ROOT.parent / "openpyxl" / "openpyxl" / "formatting" / "tests" / "data" / "conditional-formatting.xlsx",
-    "comments": ROOT.parent / "openpyxl" / "openpyxl" / "comments" / "tests" / "data" / "comments.xlsx",
-    "images": ROOT.parent / "openpyxl" / "openpyxl" / "reader" / "tests" / "data" / "sample_with_images.xlsx",
-    "table": ROOT.parent / "openpyxl" / "openpyxl" / "reader" / "tests" / "data" / "print_area_table_defined_name.xlsx",
-    "vba": ROOT.parent / "openpyxl" / "openpyxl" / "tests" / "data" / "reader" / "vba-test.xlsm",
-    "bigfoot": ROOT.parent / "openpyxl" / "openpyxl" / "tests" / "data" / "reader" / "bigfoot.xlsx",
+    "sample": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "sample.xlsx",
+    "styles": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "complex-styles.xlsx",
+    "condfmt": OPENPYXL / "openpyxl" / "formatting" / "tests" / "data" / "conditional-formatting.xlsx",
+    "comments": OPENPYXL / "openpyxl" / "comments" / "tests" / "data" / "comments.xlsx",
+    "images": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "sample_with_images.xlsx",
+    "table": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "print_area_table_defined_name.xlsx",
+    "vba": OPENPYXL / "openpyxl" / "tests" / "data" / "reader" / "vba-test.xlsm",
+    "bigfoot": OPENPYXL / "openpyxl" / "tests" / "data" / "reader" / "bigfoot.xlsx",
 }
 
 # A 1x1 PNG so add_image has a real file to embed.
@@ -122,6 +127,42 @@ def sheet_xml(name, title):
 
 def col_order(name, title="Orders"):
     return [int(m) for m in re.findall(r'<col min="(\d+)"', sheet_xml(name, title))]
+
+
+def no_dangling(name):
+    """Whether every relationship in the package names a part that is actually there.
+
+    This is the general form of the drawing defect, and the check that would have caught it:
+    a chart or an image whose part was deleted left the sheet's relationship pointing at
+    nothing, which is a file no reader can open. Checking relationships directly says so,
+    rather than leaving it to whoever opens the file next.
+    """
+    names = set(zip_names(name))
+    with zipfile.ZipFile(WORK / name) as zf:
+        for entry in zf.namelist():
+            if not entry.endswith(".rels"):
+                continue
+            owner_dir = ""
+            if not entry.startswith("_rels/"):
+                owner = entry.replace("/_rels/", "/").removesuffix(".rels")
+                owner_dir = owner.rsplit("/", 1)[0] if "/" in owner else ""
+            text = zf.read(entry).decode()
+            for target in re.findall(r'Target="([^"]+)"', text):
+                if target.startswith(("http", "mailto:", "file:")):
+                    continue
+                if target.startswith("/"):
+                    resolved = target.lstrip("/")
+                else:
+                    segments = owner_dir.split("/") if owner_dir else []
+                    for piece in target.split("/"):
+                        if piece == "..":
+                            segments.pop()
+                        elif piece != ".":
+                            segments.append(piece)
+                    resolved = "/".join(segments)
+                if resolved not in names:
+                    return False
+    return True
 
 
 def row_heights(name, title="Orders"):
@@ -520,6 +561,85 @@ CASES = [
          refuses="needs an operator",
          note="a cellIs rule without an operator names the missing argument"),
 
+    # -- A second write after a chart or an image ---------------------------------------
+    # The defect these cover was invisible to the cases above: each added its drawing as the
+    # only call on a fresh copy, so nothing ever wrote to the workbook afterwards. The tool
+    # reported success, and the next call deleted the drawing part -- leaving the sheet's
+    # relationship naming a part that was no longer there, which is a file no reader can open.
+    Case("add_chart", "orders",
+         {"sheet": "Orders", "type": "bar", "anchor": "G2",
+          "categories": "A2:A4",
+          "series": [{"name": "Qty", "values": "B2:B4"}]},
+         setup=[("set_cell", {"sheet": "Orders", "cell": "Z9", "value": 1})],
+         expect=lambda f: "xl/charts/chart1.xml" in zip_names(f)
+         and "xl/drawings/drawing1.xml" in zip_names(f)
+         and no_dangling(f),
+         note="a chart survives an unrelated write"),
+    Case("add_image", "orders",
+         {"sheet": "Orders", "image_path": "pixel.png", "anchor": "H2"},
+         setup=[("set_cell", {"sheet": "Orders", "cell": "Z9", "value": 1})],
+         expect=lambda f: any(n.startswith("xl/media/") for n in zip_names(f))
+         and "xl/drawings/drawing1.xml" in zip_names(f)
+         and no_dangling(f),
+         note="an image survives an unrelated write"),
+    Case("add_chart", "orders",
+         {"sheet": "Orders", "type": "bar", "anchor": "G20",
+          "categories": "A2:A4",
+          "series": [{"name": "Qty", "values": "B2:B4"}]},
+         setup=[("set_cell", {"sheet": "Orders", "cell": "Z9", "value": 1}),
+                ("set_cell", {"sheet": "Orders", "cell": "Z8", "value": 2}),
+                ("set_cell", {"sheet": "Orders", "cell": "Z7", "value": 3})],
+         expect=lambda f: "xl/drawings/drawing1.xml" in zip_names(f)
+         and no_dangling(f),
+         note="survives three further writes"),
+    Case("add_image", "orders",
+         {"sheet": "Sheet1", "image_path": "pixel.png", "anchor": "A1"},
+         setup=[("add_chart", {"sheet": "Orders", "type": "bar", "anchor": "G2",
+                               "categories": "A2:A4",
+                               "series": [{"name": "Qty", "values": "B2:B4"}]})],
+         expect=lambda f: len([n for n in zip_names(f)
+                               if re.fullmatch(r"xl/drawings/drawing\d+\.xml", n)]) >= 1
+         and no_dangling(f),
+         note="a chart on one sheet and an image on another do not collide"),
+    Case("add_image", "orders",
+         {"sheet": "Orders", "image_path": "pixel.png", "anchor": "H2"},
+         setup=[("add_comment", {"sheet": "Orders", "cell": "Z1", "text": "a note"}),
+                ("set_cell", {"sheet": "Orders", "cell": "Z9", "value": 1})],
+         expect=lambda f: "xl/drawings/drawing1.xml" in zip_names(f)
+         and "xl/drawings/commentsDrawing1.vml" in zip_names(f)
+         and no_dangling(f),
+         note="an image and a comment coexist"),
+    Case("set_cell", "images",
+         {"sheet": "Sheet1", "cell": "B5", "value": "hello"},
+         expect=lambda f: len(load(f)["Sheet1"]._images) == 3
+         and "xl/drawings/drawing1.xml" in zip_names(f)
+         and no_dangling(f),
+         note="EDITING A REAL FILE THAT ALREADY HAS IMAGES: all three survive"),
+    # -- Text that XML has to escape ------------------------------------------------
+    # `&`, `<`, `>`, `"` and `'` are written as entity references. The reader was handed each
+    # one as a separate event and discarded them, so a cell holding any of these came back empty
+    # after a save. The checks read the file back rather than trusting what the tool reported.
+    Case("set_cell", "orders", {"sheet": "Orders", "cell": "A10", "value": "Tom & Jerry"},
+         expect=lambda f: cells(f, "Orders", "A10") == "Tom & Jerry",
+         note="an ampersand survives a round trip"),
+    Case("write_cells", "orders",
+         {"sheet": "Orders", "start": "A11",
+          "rows": [["a < b"], ["c > d"], ['say "hi"'], ["it's"], ["R&D / P&L"]]},
+         expect=lambda f: [cells(f, "Orders", f"A{row}") for row in range(11, 16)]
+         == ["a < b", "c > d", 'say "hi"', "it's", "R&D / P&L"],
+         note="angle brackets, quotes and apostrophes all survive"),
+    Case("set_cell", "orders", {"sheet": "Orders", "cell": "A16",
+                                "value": "<b>bold</b> & <i>it</i>"},
+         expect=lambda f: cells(f, "Orders", "A16") == "<b>bold</b> & <i>it</i>",
+         note="markup-looking text is text, not markup"),
+    Case("set_header_footer", "orders",
+         {"sheet": "Orders", "center_header": "R&D report",
+          "right_footer": "Page &P of &N"},
+         setup=[("set_cell", {"sheet": "Orders", "cell": "Z9", "value": 1})],
+         expect=lambda f: load(f)["Orders"].oddHeader.center.text == "R&D report"
+         and "&P" in (load(f)["Orders"].oddFooter.right.text or ""),
+         note="a header set, then kept through a further write"),
+
     # -- Media --------------------------------------------------------------------------
     Case("add_chart", "orders", {"sheet": "Orders", "type": "bar", "anchor": "F2",
                                  "title": "Qty by item", "categories": "A2:A4",
@@ -594,7 +714,11 @@ def main() -> int:
     WORK.mkdir(parents=True)
     for name, src in SOURCES.items():
         if not src.is_file():
-            print(f"missing fixture: {src}")
+            # Say where it looked and how to move it, rather than naming one path: on CI the
+            # fixtures come from the openpyxl checkout the workflow fetches.
+            print(f"missing fixture {name}: {src}")
+            print(f"  the openpyxl checkout is taken from FERROXL_OPENPYXL, "
+                  f"currently {OPENPYXL}")
             return 2
     (WORK / "pixel.png").write_bytes(PNG)
 
@@ -607,7 +731,7 @@ def main() -> int:
     # then refuses to start another. So the server is recycled every RECYCLE calls: often
     # enough that the run finishes, rarely enough that consecutive calls still share a
     # process, which is the case where a tool could corrupt state for the next one.
-    RECYCLE = 25
+    RECYCLE = 12
 
     server = Server(WORK)
     made += 1

@@ -5,6 +5,73 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.10] - 2026-10-06
+
+Four bugs, and they share a failure mode this project cares most about: each accepted the work,
+reported success, and produced a file that silently meant something else. Two of them destroyed
+data -- one made a workbook unopenable, the other emptied every cell holding an ampersand.
+
+### Fixed
+
+- **A chart or an image was destroyed by the next write to the workbook, and left the file
+  unreadable.** `add_chart` and `add_image` both reported success, and the next tool call --
+  `set_cell`, `write_cells`, even `style_cells` -- deleted `xl/drawings/drawingN.xml` while the
+  sheet's `<drawing>` element and its relationship were preserved verbatim. The package was left
+  with a relationship naming a part that was no longer in it, so openpyxl raised
+  `KeyError: "There is no item named 'xl/drawings/drawing1.xml' in the archive"` and Excel would
+  have reported the file as needing repair. Both tools were effectively single-shot: they worked
+  once, and the next call bricked the workbook. Editing a real file that already had images in
+  it took a single `set_cell`.
+
+  The cause was `is_writer_owned` claiming `xl/drawings/drawingN.xml`, `xl/charts/chartN.xml`
+  and `xl/media/*` as parts the writer produces. That holds only for a sheet whose model still
+  has drawings, and ferroxl does not read charts or images back -- so for a loaded workbook the
+  writer produced none at all, while the preserved relationship still pointed at them. Drawings,
+  charts and media are now preserved instead, and `write_parts` renders a preserved part's own
+  `.rels`, which is what says which chart or image a drawing holds. Without that the part
+  survives as a set of anchors pointing at nothing.
+
+  Part names are now allocated past whatever is preserved rather than always from 1, which
+  fixed a second fault at the same time: a chart on one sheet and an image on another both
+  claimed `drawing1.xml`, so the second overwrote the first and the chart vanished with nothing
+  reporting it. Two sheets now get `drawing1.xml` and `drawing2.xml`.
+
+  Found by building a workbook from scratch through the server -- a case the earlier suite never
+  reached, because every one of its drawing cases made its drawing the only call on a fresh copy.
+  See `tools/mcp_real_files.py`, which now writes to the workbook *after* adding a drawing, and
+  `tools/bug_demo.py`.
+
+  This is preservation, not modelling: a chart still cannot be read back and adjusted, which
+  `PARITY.md` records under Pending. That entry also had the direction of the gap wrong -- it
+  claimed openpyxl cannot read charts back either, and openpyxl 3.1.5 round-trips both intact.
+
+- **Every `&`, `<`, `>`, `"` and `'` was silently deleted from every element's text.** The XML
+  reader reported an entity reference as its own `GeneralRef` event rather than inline, and the
+  parser's catch-all arm dropped it, so `Tom & Jerry` came back as `Tom  Jerry`. This was not
+  confined to headers: it applied to cell text, defined names, comments, table columns, every
+  part of every workbook, and no error was raised anywhere. A workbook whose cells contained an
+  ampersand lost that text on the first save, and `read_cells` reported the cells as empty.
+
+  The five entities and `&#NN;` / `&#xNN;` are now resolved, and an entity XML does not define is
+  an error rather than a silent omission -- which is what turned this into data loss in the first
+  place.
+
+- **A cell holding an inline string read back as empty.** `<c t="inlineStr">` keeps its text in
+  `<is><t>`, which is where openpyxl puts a string when the workbook has no shared string table
+  -- the default for a file it has just created. `DataType::InlineString` was modelled but neither
+  the reader nor the writer handled it: the reader looked only in `<v>`, and the writer put the
+  text *there* under an `inlineStr` type, which is a file no reader can read a value from. Every
+  string cell in a workbook openpyxl had written came back blank after a ferroxl save.
+
+- **A printed header or footer survived one save and was gone by the second.** `&L`, `&C` and `&R`
+  introduce a section, and openpyxl's parser matches them glued to their text -- `&Lleft` is a left
+  section carrying `left`. Comparing whole `&`-delimited fields found no `L` field, so the section
+  was dropped, and since `section_bounds` was the only route from a file's header to the model,
+  nothing carried it into the next save. This is the defect the entity fix above first showed
+  itself through, and fixing one without the other leaves a header that still disappears.
+
 ## [0.1.9] - 2026-10-06
 
 Three library bugs, all silent: each accepted a call, reported success, and left a file that
@@ -576,7 +643,8 @@ Each of these is documented at the call site as well as in the README.
 - Files written by ferroxl are opened with openpyxl 3.x and the values, styles, merges,
   validations, comments, defined names and freeze panes compared.
 
-[Unreleased]: https://github.com/SV-stark/ferroxl/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/SV-stark/ferroxl/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.10
 [0.1.9]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.9
 [0.1.8]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.8
 [0.1.7]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.7

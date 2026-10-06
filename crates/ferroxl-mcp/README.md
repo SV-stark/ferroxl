@@ -33,7 +33,7 @@ sandbox: a caller that can launch this process can already do whatever it likes.
 
 ```console
 $ ferroxl-mcp --help
-ferroxl-mcp 0.1.7 — a Model Context Protocol server for Excel workbooks
+ferroxl-mcp 0.1.10 - a Model Context Protocol server for Excel workbooks
 
 USAGE:
     ferroxl-mcp [--root <directory>]
