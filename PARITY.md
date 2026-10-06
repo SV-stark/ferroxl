@@ -219,6 +219,13 @@ as `#REF!`, and clamping would keep the formula loadable while quietly meaning s
 the tokenizer and recursive-descent parser behind `Workbook::recalculate`, covering 31
 functions — see [Resolved](#resolved).
 
+A formula is stored with its function names verbatim, which is right for every function the
+format carried in 2007 and wrong for the ones added since: see [Pending](#4-a-dynamic-array-formula-is-written-as-a-bare-function-name).
+Nothing consults a list of function names before a formula reaches the file. openpyxl's
+`FORMULAE` — 355 names — is one of the two names unmatched in `formula/` above, and it would be
+the starting point rather than the answer, since a future function and a dynamic array need
+different things done to them.
+
 ### `namedrange` — `openpyxl/namedrange`
 
 `NamedRange`, `NamedRangeContainingValue`, the `DefinedName` enum, `split_named_range` and
@@ -365,7 +372,7 @@ structure (9), values (4), layout (4), formatting (4) and media and annotations 
 
 ## Pending
 
-Three areas where openpyxl has something ferroxl does not, ordered by how likely they are to
+Four areas where openpyxl has something ferroxl does not, ordered by how likely they are to
 matter.
 
 ### 1. There is no read-only loader
@@ -430,6 +437,50 @@ could open the file. `add_chart` and `add_image` were effectively single-shot: t
 the next tool call destroyed the workbook. Editing a real file that already had images in it
 took one `set_cell` to render it unopenable. Fixed in 0.1.10; `tools/mcp_real_files.py` now
 writes to the workbook *after* adding a drawing, which is the check that would have caught it.
+
+### 4. A dynamic array formula is written as a bare function name
+
+Not a parity gap against openpyxl — a shared defect. Both store whatever name they are given,
+and Excel shows `#NAME?` for anything introduced after the file format froze. The consequence
+is only visible in Excel, so no test in this repository can see it and neither does
+`tools/mcp_real_files.py`: the file is well-formed, and openpyxl reads the formula back exactly
+as written.
+
+`=SEQUENCE(3)` through `set_cell`, and what each writer stores in `xl/worksheets/sheet1.xml`:
+
+| | cell XML | metadata part |
+| --- | --- | --- |
+| ferroxl 0.1.10 | `<c r="A3"><f>SEQUENCE(3)</f><v></v></c>` | none |
+| openpyxl 3.1.5 | identical, byte for byte | none |
+| XlsxWriter 3.2.9 | `<c r="A3" cm="1"><f t="array" ref="A3">_xlfn.SEQUENCE(3)</f><v>0</v></c>` | `xl/metadata.xml` |
+
+Three things are wrong at once, not one. `SEQUENCE` is a **future function**, so the stored name
+has to be `_xlfn.SEQUENCE`. It is a **dynamic array**, so the cell needs `cm="1"` pointing at a
+cell-metadata record. And that record has to live in an `xl/metadata.xml` part, declared in
+`[Content_Types].xml` and related from `xl/workbook.xml`.
+
+Reproduce with `python tools/dynarray_demo.py`, which prints the comparison above. That script
+also shows that the prefix alone is not the whole story: for `=IFS(...)` — a future function
+but *not* a dynamic array — XlsxWriter writes the bare name too. Only the dynamic-array row
+differs between the three.
+
+**Effect.** An agent that writes `=SEQUENCE(...)`, `=FILTER(...)`, `=SORT(...)`, `=UNIQUE(...)`,
+`=LET(...)`, `=XLOOKUP(...)` or any other post-2007 function gets a workbook that opens and
+looks fine, and shows `#NAME?` in every one of those cells.
+
+**What to do instead, and it works today.** Write the stored name: `=_xlfn.SEQUENCE(3)` is
+stored verbatim as `_xlfn.SEQUENCE(3)`, which is the form Excel resolves. The prefix is not
+interpreted or stripped on the way through, so passing it is sufficient.
+
+**Why this is recorded rather than fixed.** A correct fix needs a list of the future functions,
+a second list of the dynamic-array subset, `cm` on the affected cells, a new part with its
+content-type override and its workbook relationship, and cached values for the spilled cells —
+and it lands squarely in the cell serialisation and part table where four of the five defects
+in 0.1.10 lived. Writing `xl/metadata.xml` wrong does not produce a wrong-looking file, it
+produces one Excel refuses to open, and there is no way to test the difference here without
+Excel. Prefixing a function that must not be prefixed is its own silent failure. The workaround
+costs a caller one string and cannot corrupt a file, so the risk is not worth taking to remove
+a `#NAME?` a caller can see and fix.
 
 ### Resolved
 

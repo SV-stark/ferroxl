@@ -7,6 +7,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documented
+
+- **A dynamic array formula is written as a bare function name, and Excel shows `#NAME?` for
+  it.** `=SEQUENCE(3)` through `set_cell` stores `<f>SEQUENCE(3)</f>` with no `_xlfn.` prefix,
+  no `cm="1"`, and no `xl/metadata.xml`, where XlsxWriter writes all three. openpyxl 3.1.5
+  produces output identical to ferroxl's, so this is a shared defect rather than a parity gap,
+  and it is invisible to every harness here because the file is well-formed and reads back
+  exactly as written — only Excel disagrees.
+
+  Recorded as Pending item 4 in `PARITY.md` rather than fixed, with the reasoning. Writing
+  `=_xlfn.SEQUENCE(3)` works today: the prefix is stored verbatim, which is the form Excel
+  resolves. A real fix needs a function list, `cm` on affected cells, a new package part with
+  its content type and relationship, and cached values for the spilled cells, all in the cell
+  serialisation and part table where four of the five defects in 0.1.10 lived — and a
+  malformed `metadata.xml` yields a file Excel refuses to open, which nothing here can test.
+  `python tools/dynarray_demo.py` prints the three-way comparison.
+
 ## [0.1.10] - 2026-10-06
 
 Four bugs, and they share a failure mode this project cares most about: each accepted the work,
