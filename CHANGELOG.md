@@ -72,6 +72,37 @@ data -- one made a workbook unopenable, the other emptied every cell holding an 
   nothing carried it into the next save. This is the defect the entity fix above first showed
   itself through, and fixing one without the other leaves a header that still disappears.
 
+### Added
+
+- **`crates/ferroxl/tests/round_trip_invariant.rs`, which asserts the two properties every one
+  of those four bugs breaks.** Five tests over a workbook built through the public API and then
+  read back through the reader: the package is coherent -- every relationship in it names a part
+  that exists -- and the text survived -- every character the writer was given is the character
+  read back. A second save has to keep both, and three saves in a row have to leave every one of
+  ten awkward strings byte-identical, which catches a handler that degrades text a little more on
+  each pass rather than dropping it at once.
+
+  It is worth recording that this catches all four. Reverting each fix in turn and re-running only
+  this file:
+
+  | fix reverted | result |
+  | --- | --- |
+  | `xml/functions.rs` (the entity handling) | 5 of 5 fail |
+  | `reader/preserved.rs` (drawings, charts, media) | 2 of 5 fail |
+  | `reader/worksheet.rs` (inline strings) | 1 of 5 fails |
+  | `writer/worksheet.rs` (inline strings written back) | 1 of 5 fails |
+  | `worksheet/header_footer.rs` (glued section markers) | 1 of 5 fails |
+
+  A suite of 751 tests had missed every one, because every one of them checked names, or checked
+  a single call's own report of what it did, rather than the file that came out.
+
+- **`tools/mcp_real_files.py` now runs in CI.** It drove 103 calls across all 41 tools against
+  nine real workbooks, verifying each mutation by reading the file back with openpyxl rather than
+  by asking the server what it thought it had done. It was the harness that found the four bugs
+  above, and it was not running in the pipeline at all. It runs after the openpyxl checkout is
+  fetched, since eight of the nine workbooks are openpyxl's own fixtures; `FERROXL_OPENPYXL`
+  overrides where that checkout is looked for.
+
 ## [0.1.9] - 2026-10-06
 
 Three library bugs, all silent: each accepted a call, reported success, and left a file that

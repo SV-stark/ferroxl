@@ -141,6 +141,18 @@ jobs:
 
       # openpyxl's own test suite, run against ferroxl as the implementation. See
       # tools/upstream/README.md for what is covered and what cannot be.
+      # Against real workbooks rather than fixtures the server wrote itself, with every
+      # mutation checked by reading the result back with openpyxl. This is the harness that
+      # found the four bugs in 0.1.10 -- a chart or an image deleted by the next save, every
+      # `&` dropped from every element's text, an inline string read back empty, a header gone
+      # after one save -- none of which any of the three harnesses above could see, because all
+      # three check names, or a single call, rather than the file that comes out. It needs the
+      # fixtures the previous step fetched, which is why it runs after them.
+      - name: Every tool against real workbooks
+        run: python tools/mcp_real_files.py
+
+      # openpyxl's own test suite, run against ferroxl as the implementation. See
+      # tools/upstream/README.md for what is covered and what cannot be.
       - name: openpyxl's own tests, against ferroxl
         run: python tools/upstream/run.py "$OPENPYXL_CHECKOUT"
 
