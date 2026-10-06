@@ -872,7 +872,7 @@ through the API: every one of these passed every unit test.
 ferroxl's and prints what is missing. This document is its output, and the
 [Pending](#pending) list is what it still reports.
 
-The suite is 756 tests - 618 in the library, 123 in the MCP server and 12 doctests - and
+The suite is 762 tests - 624 in the library, 123 in the MCP server and 12 doctests - and
 `cargo build`, `cargo clippy -- -D warnings`, `cargo fmt --check` and
 `RUSTDOCFLAGS=-D warnings cargo doc` are all clean.
 

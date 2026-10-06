@@ -162,7 +162,7 @@ pub fn merge_rels(
         });
     }
 
-    let merged = merge_relationships(&own, preserved_rels);
+    let merged = merge_relationships(&own, preserved_rels, rels_path);
     (rels_document(&merged.relationships), merged.id_map)
 }
 
@@ -177,7 +177,7 @@ pub fn rels_from_preserved(preserved: &PreservedParts, rels_path: &str) -> Optio
     if preserved_rels.is_empty() {
         return None;
     }
-    let merged = merge_relationships(&[], preserved_rels);
+    let merged = merge_relationships(&[], preserved_rels, rels_path);
     Some(rels_document(&merged.relationships))
 }
 

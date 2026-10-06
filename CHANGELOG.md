@@ -7,6 +7,40 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`remove_sheet` left a trace of the sheet it removed, and any later edit wrote that trace into
+  the file.** Removing a sheet reported `remaining: ["Orders"]` and produced a file that really
+  did contain only `Orders` — but its `xl/_rels/workbook.xml.rels` held three worksheet
+  relationships where there should have been one, and one of them named a part that was not in
+  the package. `list_sheets` on the result reported a sheet named `Sheet2` that did not exist,
+  and a single `set_cell` afterwards wrote it: the file ended up with two sheets, `Sheet2`
+  holding a duplicate of its neighbour's cells. In a three-sheet workbook the stale relationship
+  pointed at `xl/worksheets/sheet3.xml`, which no longer existed at all — a package with a
+  relationship pointing at nothing, which is the same unopenable file as the drawing defect in
+  0.1.10 reached by a different door.
+
+  The dedup in `merge_relationships` compared target *strings*, so openpyxl's
+  `/xl/worksheets/sheet1.xml` and the writer's `worksheets/sheet1.xml` were two different parts
+  and both were written. It also had no answer for a preserved relationship into a part the
+  writer renumbers from scratch, which by construction no longer exists. Targets are now
+  resolved to a package-absolute path before comparison — handling the leading `/` that
+  openpyxl writes, the `../` a sheet's `.rels` uses, and any query or fragment — and a preserved
+  relationship is dropped when it is redundant *or* stale. Relationships into families the
+  writer does not own are still kept, which is the whole reason the merge exists: a pivot cache,
+  a chart, a drawing and a VBA project are reached only through a relationship the source wrote.
+
+  Found while making `tools/mcp_real_files.py` self-contained — see below — by removing a sheet
+  and then asking a tool to list them, which no case did.
+
+- **`tools/mcp_real_files.py` depended on `orders.xlsx`, which is not in the repository.**
+  `*.xlsx` is gitignored, so the file only exists after someone has run
+  `cargo run --example build_and_read`, and CI never runs the examples — wiring the harness into
+  the pipeline would have failed on its first step. It now writes that workbook itself, always
+  and with openpyxl, rather than using it when present. Generating it unconditionally also means a
+  local run and a CI run cannot end up testing different files. The harness stays honest: the
+  workbook is written by a third party, never by the server under test.
+
 ### Documented
 
 - **A dynamic array formula is written as a bare function name, and Excel shows `#NAME?` for

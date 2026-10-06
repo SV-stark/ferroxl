@@ -30,14 +30,14 @@ warnings.simplefilter("ignore", UserWarning)
 ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / "target" / "mcp_real_files"
 
-# Real workbooks, each the best honest example of the feature it is used for. Taken from
-# the openpyxl test corpus and from this repo, so they are files real software produced.
-# Where the openpyxl fixtures live. The upstream checkout is a sibling of this repository, which
-# is where CI puts it; override with FERROXL_OPENPYXL to point somewhere else.
+# Real workbooks, each the best honest example of the feature it is used for, taken from the
+# openpyxl test corpus, so they are files real software produced.
+#
+# Where the openpyxl fixtures live. The upstream checkout is a sibling of this repository,
+# which is where CI puts it; override with FERROXL_OPENPYXL to point somewhere else.
 OPENPYXL = Path(os.environ.get("FERROXL_OPENPYXL") or ROOT.parent / "openpyxl")
 
 SOURCES = {
-    "orders": ROOT / "orders.xlsx",
     "sample": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "sample.xlsx",
     "styles": OPENPYXL / "openpyxl" / "reader" / "tests" / "data" / "complex-styles.xlsx",
     "condfmt": OPENPYXL / "openpyxl" / "formatting" / "tests" / "data" / "conditional-formatting.xlsx",
@@ -47,6 +47,49 @@ SOURCES = {
     "vba": OPENPYXL / "openpyxl" / "tests" / "data" / "reader" / "vba-test.xlsm",
     "bigfoot": OPENPYXL / "openpyxl" / "tests" / "data" / "reader" / "bigfoot.xlsx",
 }
+
+# The one workbook that is generated rather than checked in.
+#
+# It reproduces what `cargo run --example build_and_read` writes, because 90 of the 103 calls
+# run against it. Two reasons not to use the example's own output: `*.xlsx` is gitignored, so
+# on a fresh checkout -- and in CI, which never runs the examples -- the file simply is not
+# there; and if the harness used it when present and generated it when absent, a local run and
+# a CI run would be testing different files, which is the worst property a test harness can
+# have. Generating it unconditionally removes both.
+#
+# It is written with openpyxl, never with the server. That is the whole premise of this file:
+# nothing under test is allowed to have built the workbook being read back.
+GENERATED = {"orders": "write_orders_workbook"}
+
+
+def write_orders_workbook(path):
+    """Write the `orders` fixture: two sheets, formulas, a merge, frozen panes, real styles."""
+    from openpyxl.styles import Font, PatternFill
+
+    book = openpyxl.Workbook()
+    book.active.title = "Sheet1"
+    sheet = book.create_sheet("Orders")
+
+    for row in (["Item", "Qty", "Price", "Total"],
+                ["Bolt", 10, 1.5, "=B2*C2"],
+                ["Nut", 25, 0.75, "=B3*C3"]):
+        sheet.append(row)
+
+    # A bold white-on-navy header, so `style_cells` and `read_cells` have something real to
+    # find. openpyxl writes the colour as `FFFFFFFF`, which is what the example writes too.
+    for letter in "ABCD":
+        sheet[f"{letter}1"].font = Font(bold=True, color="FFFFFFFF")
+        sheet[f"{letter}1"].fill = PatternFill("solid", fgColor="FF1F3864")
+
+    # `merge_cells` blanks everything but the top-left cell, so merge before writing.
+    sheet.merge_cells("A6:D6")
+    sheet["A6"] = "Two line items"
+    sheet.freeze_panes = "A2"
+    for coordinate in ("B2", "C2", "B3", "C3"):
+        sheet[coordinate].number_format = "0.00"
+
+    book.save(path)
+    return path
 
 # A 1x1 PNG so add_image has a real file to embed.
 PNG = bytes.fromhex(
@@ -81,6 +124,16 @@ class Case:
 
 # -- readback helpers ------------------------------------------------------------------
 # Every one of these asks openpyxl, never the server.
+
+def fixture_path(name):
+    """Where a fixture's pristine copy lives, generating it the first time if it is ours."""
+    if name in SOURCES:
+        return SOURCES[name]
+    generated = WORK / f"{name}.xlsx"
+    if not generated.is_file():
+        globals()[GENERATED[name]](generated)
+    return generated
+
 
 def load(name):
     return openpyxl.load_workbook(WORK / name)
@@ -366,6 +419,19 @@ CASES = [
          setup=[("remove_sheet", {"sheet": "Sheet1"})],
          refuses="at least one sheet",
          note="emptying a workbook is refused, as openpyxl refuses it"),
+    # A removal followed by an ordinary edit is what turns a stale relationship into a sheet in
+    # the file: the phantom is in the model by then, so the next save writes it out with a copy of
+    # its neighbour's cells. The two cases here are the two halves -- what the server reports, and
+    # what is actually on disk.
+    Case("list_sheets", "orders", {},
+         setup=[("remove_sheet", {"sheet": "Sheet1"})],
+         expect=lambda f: sheets(f) == ["Orders"],
+         check=lambda d: [s["name"] for s in d["sheets"]] == ["Orders"],
+         note="after a removal the report matches the file, with no invented sheet"),
+    Case("set_cell", "orders", {"sheet": "Orders", "cell": "Z9", "value": "edited"},
+         setup=[("remove_sheet", {"sheet": "Sheet1"})],
+         expect=lambda f: sheets(f) == ["Orders"] and cells(f, "Orders", "Z9") == "edited",
+         note="an edit after a removal does not add a sheet back"),
     Case("rename_sheet", "orders", {"sheet": "Orders", "title": "Sales"},
          expect=lambda f: sheets(f) == ["Sheet1", "Sales"]
          and cells(f, "Sales", "A1") == "Item",
@@ -777,7 +843,7 @@ def main() -> int:
                 seen.append(case.tool)
             # Every case works on a file of its own, named after the tool.
             target = f"{case.tool}{case.extension}"
-            shutil.copy(SOURCES[case.fixture], WORK / target)
+            shutil.copy(fixture_path(case.fixture), WORK / target)
 
             # `path` is the tool's own argument, so a case that names its own file (only
             # create_workbook does) keeps it; everything else writes to its own copy.

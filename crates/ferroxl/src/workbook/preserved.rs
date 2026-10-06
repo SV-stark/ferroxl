@@ -452,21 +452,94 @@ impl IdAllocator {
     }
 }
 
+/// Resolve a relationship `target` to the package-absolute path it names.
+///
+/// A target is spelled three ways in the wild, and all three reach this code:
+///
+/// - absolute from the package root, `/xl/worksheets/sheet1.xml`, which is what openpyxl
+///   writes;
+/// - relative to the declaring part's directory, `worksheets/sheet1.xml`, which is what this
+///   writer emits and what Excel writes;
+/// - relative with a step up, `../drawings/drawing1.xml`, which is what a sheet's `.rels` uses.
+///
+/// `base_directory` is the directory of the part holding the `.rels`, so `xl/_rels/workbook.xml.rels`
+/// gives `xl` and `xl/worksheets/_rels/sheet1.xml.rels` gives `xl/worksheets`. Comparing the raw
+/// strings instead is the defect this exists to remove: `worksheets/sheet1.xml` and
+/// `/xl/worksheets/sheet1.xml` are one part, and treating them as two leaves a duplicate
+/// relationship behind every save.
+pub fn resolve_target(base_directory: &str, target: &str) -> String {
+    // A leading `/` means the target is already package-absolute, so `base_directory` does not
+    // apply. Reading it as relative is the easy mistake here, and it produces a path that names
+    // no part at all -- `xl/xl/styles.xml` -- which then matches nothing.
+    let absolute = target.starts_with('/');
+    let trimmed = target.trim_start_matches('/');
+    let mut segments: Vec<&str> = if absolute || base_directory.is_empty() {
+        Vec::new()
+    } else {
+        base_directory
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    for piece in trimmed.split('/') {
+        match piece {
+            // A `Target` may carry a fragment or a query; neither is part of the part's name.
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            piece => segments.push(piece.split(['?', '#']).next().unwrap_or(piece)),
+        }
+    }
+    segments.join("/")
+}
+
+/// The directory a `.rels` part's targets are relative to.
+///
+/// `_rels/.rels` declares the package itself rather than a part, so its targets resolve from the
+/// root. It has to be named rather than derived: there is no owning part to take a directory
+/// from, and reading one out of the path yields `_rels`, which would resolve every target into a
+/// directory that does not exist and so match nothing.
+pub fn rels_base_directory(rels_path: &str) -> String {
+    if rels_path == "_rels/.rels" || rels_path == ".rels" {
+        return String::new();
+    }
+    let owner = crate::reader::preserved::part_for_rels(rels_path);
+    match owner.rsplit_once('/') {
+        Some((directory, _)) => directory.to_string(),
+        None => String::new(),
+    }
+}
+
 /// Merge the writer's relationships with a source's, moving any preserved id that would collide.
 ///
-/// A preserved relationship whose target the writer also produces is dropped: two relationships
-/// to one part is not what the source said, and keeping both would make Excel read whichever
-/// target an element happened to name.
+/// `rels_path` is the `.rels` being written, which is what says what the targets are relative to.
+///
+/// A preserved relationship is dropped when it is redundant or stale, which between them is every
+/// relationship into a part the writer owns:
+///
+/// - **redundant** -- its target is one the writer emits, so two relationships name one part.
+///   That is not what the source said, and Excel resolves whichever id an element happens to name.
+/// - **stale** -- its target is in a family the writer renumbers from scratch, such as
+///   `xl/worksheets/sheetN.xml`. The writer is the only authority on which of those exist, so a
+///   preserved one naming a part that is not there would leave the package with a relationship
+///   pointing at nothing -- which is a file Excel refuses to open.
+///
+/// Relationships into a family the writer does *not* own are kept, and that is the whole reason
+/// this function exists: a preserved pivot cache, drawing, chart or VBA project is reached only
+/// through a relationship the source wrote and nothing here would write it again.
 pub fn merge_relationships(
     generated: &[GeneratedRelationship],
     preserved: &[PreservedRelationship],
+    rels_path: &str,
 ) -> MergedRelationships {
+    let base = rels_base_directory(rels_path);
     let mut allocator = IdAllocator::default();
     allocator.reserve(generated.iter().map(|entry| entry.id.clone()));
 
-    let generated_targets: BTreeSet<&str> = generated
+    let generated_targets: BTreeSet<String> = generated
         .iter()
-        .map(|entry| entry.target.as_str())
+        .map(|entry| resolve_target(&base, &entry.target))
         .collect();
 
     let mut merged = MergedRelationships {
@@ -474,8 +547,13 @@ pub fn merge_relationships(
         id_map: BTreeMap::new(),
     };
     for entry in preserved {
-        if entry.target_mode.is_none() && generated_targets.contains(entry.target.as_str()) {
-            continue;
+        if entry.target_mode.is_none() {
+            let resolved = resolve_target(&base, &entry.target);
+            if generated_targets.contains(&resolved)
+                || crate::reader::preserved::is_writer_owned(&resolved)
+            {
+                continue;
+            }
         }
         let id = allocator.allocate(&entry.id);
         if id != entry.id {
@@ -621,7 +699,7 @@ mod tests {
             "t/pivotCacheDefinition",
             "pivotCache/pivotCacheDefinition1.xml",
         )];
-        let merged = merge_relationships(&generated, &preserved);
+        let merged = merge_relationships(&generated, &preserved, "xl/_rels/workbook.xml.rels");
 
         assert_eq!(merged.relationships.len(), 3);
         let moved = merged
@@ -656,11 +734,129 @@ mod tests {
             "t/theme",
             "theme/theme1.xml",
         )];
-        let merged = merge_relationships(&generated, &preserved);
+        let merged = merge_relationships(&generated, &preserved, "xl/_rels/workbook.xml.rels");
         assert_eq!(merged.relationships.len(), 1);
         assert!(
             merged.id_map.is_empty(),
             "nothing moved, so nothing needs rewriting"
+        );
+    }
+
+    /// The defect this all came from: a target the source spelled absolutely and the writer
+    /// spelled relatively is still the same part.
+    ///
+    /// openpyxl writes `/xl/worksheets/sheet1.xml`; this writer emits
+    /// `worksheets/sheet1.xml`. Comparing the strings found two different targets, kept both,
+    /// and a `remove_sheet` followed by any other edit then duplicated the remaining sheet into
+    /// the file -- `list_sheets` reported a `Sheet2` that was not there.
+    #[test]
+    fn a_target_spelled_absolutely_is_recognised_as_the_same_part() {
+        let generated = vec![GeneratedRelationship::internal(
+            "rId1",
+            "t/sheet",
+            "worksheets/sheet1.xml",
+        )];
+        let preserved = vec![PreservedRelationship::internal(
+            "rId5",
+            "t/sheet",
+            "/xl/worksheets/sheet1.xml",
+        )];
+        let merged = merge_relationships(&generated, &preserved, "xl/_rels/workbook.xml.rels");
+        assert_eq!(
+            merged.relationships.len(),
+            1,
+            "one part, one relationship: {:?}",
+            merged.relationships
+        );
+    }
+
+    /// A preserved relationship into a part the writer renumbers is stale, not redundant.
+    ///
+    /// Removing a sheet from a three-sheet workbook leaves the source's relationship to
+    /// `sheet3.xml` naming a part the writer never emitted. A package with a relationship
+    /// pointing at nothing is a file Excel reports as needing repair, which is the same failure
+    /// as the drawing bug in 0.1.10 reached by a different door.
+    #[test]
+    fn a_preserved_relationship_to_a_removed_part_is_dropped() {
+        let generated = vec![
+            GeneratedRelationship::internal("rId1", "t/sheet", "worksheets/sheet1.xml"),
+            GeneratedRelationship::internal("rId2", "t/sheet", "worksheets/sheet2.xml"),
+        ];
+        let preserved = vec![
+            PreservedRelationship::internal("rId1", "t/sheet", "/xl/worksheets/sheet1.xml"),
+            PreservedRelationship::internal("rId2", "t/sheet", "/xl/worksheets/sheet2.xml"),
+            PreservedRelationship::internal("rId3", "t/sheet", "/xl/worksheets/sheet3.xml"),
+        ];
+        let merged = merge_relationships(&generated, &preserved, "xl/_rels/workbook.xml.rels");
+        assert_eq!(
+            merged.relationships.len(),
+            2,
+            "the writer said which sheets exist; sheet3.xml is not one of them: {:?}",
+            merged.relationships
+        );
+    }
+
+    /// A relationship into a family the writer does not own is exactly what is being kept.
+    ///
+    /// A pivot cache, a chart, a drawing and a VBA project are reached only through a
+    /// relationship the source wrote. Dropping these would lose the parts along with it.
+    #[test]
+    fn a_relationship_to_a_preserved_part_survives() {
+        let generated = vec![GeneratedRelationship::internal(
+            "rId1",
+            "t/sheet",
+            "worksheets/sheet1.xml",
+        )];
+        let preserved = vec![
+            PreservedRelationship::internal(
+                "rId2",
+                "t/pivotCacheDefinition",
+                "pivotCache/pivotCacheDefinition1.xml",
+            ),
+            PreservedRelationship::internal("rId3", "t/vbaProject", "vbaProject.bin"),
+        ];
+        // A sheet's relationships, which is where a drawing is reached from.
+        let merged = merge_relationships(
+            &generated,
+            &preserved,
+            "xl/worksheets/_rels/sheet1.xml.rels",
+        );
+        assert_eq!(merged.relationships.len(), 3, "{:?}", merged.relationships);
+
+        let drawing = [PreservedRelationship::internal(
+            "rId4",
+            "t/drawing",
+            "../drawings/drawing1.xml",
+        )];
+        let merged =
+            merge_relationships(&generated, &drawing, "xl/worksheets/_rels/sheet1.xml.rels");
+        assert_eq!(
+            merged.relationships.len(),
+            2,
+            "the relationship to the drawing the writer cannot reproduce: {:?}",
+            merged.relationships
+        );
+    }
+
+    #[test]
+    fn a_target_resolves_through_a_step_up_and_to_the_package_root() {
+        // `..` has to be resolved before the comparison, or `../tables/table1.xml` from a
+        // sheet and `xl/tables/table1.xml` from the workbook look like different parts.
+        assert_eq!(
+            resolve_target("xl/worksheets", "../drawings/drawing1.xml"),
+            "xl/drawings/drawing1.xml"
+        );
+        assert_eq!(resolve_target("xl", "/xl/styles.xml"), "xl/styles.xml");
+        assert_eq!(
+            resolve_target("xl/worksheets", "../../docProps/app.xml"),
+            "docProps/app.xml"
+        );
+        // `_rels/.rels` declares the package, so its targets resolve from the root.
+        assert_eq!(rels_base_directory("_rels/.rels"), "");
+        assert_eq!(rels_base_directory("xl/_rels/workbook.xml.rels"), "xl");
+        assert_eq!(
+            rels_base_directory("xl/worksheets/_rels/sheet1.xml.rels"),
+            "xl/worksheets"
         );
     }
 
@@ -676,7 +872,7 @@ mod tests {
             "t/hyperlink",
             "https://example.com",
         )];
-        let merged = merge_relationships(&generated, &preserved);
+        let merged = merge_relationships(&generated, &preserved, "xl/_rels/workbook.xml.rels");
         assert_eq!(
             merged.relationships.len(),
             2,

@@ -247,6 +247,117 @@ fn a_second_save_does_not_lose_what_the_first_one_wrote() {
     );
 }
 
+/// Removing a sheet must not leave a trace of it, and must not cost the sheets that remain.
+///
+/// Two faults, both in the merge of a source's relationships with the writer's own. The dedup
+/// compared target *strings*, so openpyxl's `/xl/worksheets/sheet1.xml` and the writer's
+/// `worksheets/sheet1.xml` looked like two parts and both were written; the reader then built
+/// two worksheets from one relationship set and reported a `Sheet2` that was not in the file.
+/// And a preserved relationship to a sheet the writer renumbered away was kept, leaving the
+/// package with a relationship naming a part that was not there -- which is the same
+/// unopenable-file failure as the drawing bug above, reached through a different door.
+///
+/// The observable damage is that a removal followed by any ordinary edit *adds* a sheet: the
+/// phantom is in the model by then, so the next save writes it, complete with a copy of its
+/// neighbour's cells.
+#[test]
+fn removing_a_sheet_leaves_no_trace_and_costs_the_rest_nothing() {
+    for victim in 0..3 {
+        let mut source = Workbook::new();
+        source.create_sheet(Some("B")).expect("a sheet");
+        source.create_sheet(Some("C")).expect("a sheet");
+        let keep = ["Sheet1", "B", "C"]
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != victim)
+            .map(|(_, name)| name.to_string())
+            .collect::<Vec<_>>();
+
+        let first = source.to_bytes().expect("saved");
+        let mut reloaded = load_workbook_from_bytes(first, Default::default()).expect("loadable");
+        reloaded
+            .remove_sheet(victim)
+            .expect("the sheet is there to remove");
+        // An unrelated edit, which is what turns the phantom from a report into a file.
+        reloaded
+            .active_sheet_mut()
+            .expect("an active sheet")
+            .set("Z9", CellValue::text("edited"))
+            .expect("cell");
+        let second = reloaded.to_bytes().expect("saved again");
+
+        let dangling = dangling_relationships(&second);
+        assert!(
+            dangling.is_empty(),
+            "removing sheet {victim} left {dangling:?}"
+        );
+
+        let workbook = load_workbook_from_bytes(second, Default::default()).expect("loadable");
+        assert_eq!(
+            workbook.get_sheet_names(),
+            keep,
+            "removing sheet {victim} should leave exactly {keep:?}, with no sheet invented"
+        );
+        assert_eq!(
+            text_of(workbook.active_sheet().expect("an active sheet"), "Z9").as_deref(),
+            Some("edited"),
+            "the edit that followed the removal has to be in the file"
+        );
+    }
+}
+
+/// A relationship into a part the writer does not own is the only thing keeping it reachable.
+///
+/// The counterpart to the test above, and the reason the filter cannot simply drop everything a
+/// source wrote. A workbook with a drawing has to come back with the drawing *and* the
+/// relationship naming it, or the part survives as anchors pointing at nothing.
+#[test]
+fn a_preserved_drawing_keeps_its_relationship_after_a_save() {
+    // A drawing read from a file, not one built in memory: this is the case the writer cannot
+    // reproduce, so the relationship has to be preserved rather than regenerated.
+    let mut source = Workbook::new();
+    source.create_sheet(Some("Other")).expect("a sheet");
+    {
+        let sheet = source.active_sheet_mut().expect("an active sheet");
+        sheet.set("A1", CellValue::text("Item")).expect("cell");
+        sheet
+            .images
+            .push(Image::from_png(PNG.to_vec()).expect("a png"));
+    }
+    let first = source.to_bytes().expect("saved");
+
+    let mut reloaded = load_workbook_from_bytes(first, Default::default()).expect("loadable");
+    reloaded
+        .active_sheet_mut()
+        .expect("an active sheet")
+        .set("B2", CellValue::number(7.0))
+        .expect("cell");
+    let second = reloaded.to_bytes().expect("saved again");
+
+    let names = part_names(&second);
+    assert!(
+        names.contains(&"xl/media/image1.png".to_string()),
+        "the image itself must survive: {names:?}"
+    );
+
+    // And the sheet still says which drawing holds it.
+    let mut archive = zip::ZipArchive::new(Cursor::new(second)).expect("a zip");
+    let mut sheet_xml = String::new();
+    {
+        let mut sheet = archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .expect("the first sheet");
+        std::io::Read::read_to_string(&mut sheet, &mut sheet_xml).expect("utf-8");
+    }
+    // And the sheet still says which drawing holds it. Matched with or without a namespace
+    // prefix, because the preserved element is written back under its braced namespace and the
+    // serialiser spells that as `<s:drawing>` rather than `<drawing>`.
+    assert!(
+        sheet_xml.contains("<drawing") || sheet_xml.contains(":drawing"),
+        "the sheet must still reference its drawing; it has {sheet_xml:?}"
+    );
+}
+
 /// Every save has to be a fixed point of the text, not merely survive one.
 ///
 /// A single check catches a regression that drops text once; this one catches anything that
