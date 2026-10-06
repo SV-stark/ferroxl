@@ -5,9 +5,33 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.9] - 2026-10-06
+
+Three library bugs, all silent: each accepted a call, reported success, and left a file that
+said something else. None was a missing name, so `tools/parity.py` -- which matches names --
+could not see any of them. Two of the three are in the writer, and both lose what they were
+given.
 
 ### Fixed
+
+- **A row height set on a row that holds no cells was discarded on save.** `set_row_height`
+  reported the rows it set and the height it set, and neither reached the file. `<row>` is the
+  only element a row height can live in, and the writer built its `<row>` elements from the
+  cells alone, so a row present only in `row_dimensions` was never written - taking its height,
+  its hidden flag, its outline level and its style with it. On a sheet whose fourth row is
+  empty, `set_row_height(rows="2:4")` set rows 2 and 3 and dropped 4; `set_row_height(rows="9")`
+  on an empty row did nothing at all. openpyxl keeps such a row, and so must this. Rows are now
+  merged from both sources and written ascending, and a row dimension with nothing set still
+  gets no element of its own.
+  Found by calling every tool against real workbooks instead of fixtures the server wrote
+  itself, checking each mutation by reading the result back with openpyxl rather than by asking
+  the server what it thought it had done - see `tools/mcp_real_files.py`.
+
+- **`<col>` elements were written in the wrong order.** Column dimensions are keyed by letters,
+  and `"Z"` sorts before `"AA"`, so a sheet given widths on `Z:AB` wrote its `<col>` list as
+  `1, 27, 28, 2, 3, 4, 26`. Every width was correct and openpyxl reads all of them back; only
+  the order departed from what Excel and openpyxl both write. Entries are now ordered by column
+  number. The unit test covering this set a single column, so it could not have seen it.
 
 - **A workbook part not named `xl/workbook.xml` was rejected outright.** The reader assumed the
   conventional name rather than following the package relationships, so a valid OOXML package
@@ -37,8 +61,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass, which is the failure mode this whole change set exists to prevent.
 - The openpyxl links in `README.md` and `PARITY.md` pointed at a repository that 404s.
 
-Nothing in this section affects the published crates: `tools/`, the repository README,
-`PARITY.md` and `.github/` are not part of either package, so 0.1.8 is unaffected.
+The three fixes above are in the library and are what this release ships. The two harness
+faults below are in `tools/`, `.github/`, the repository README and `PARITY.md`, none of which
+are part of either package.
 
 ## [0.1.8] — 2026-10-05
 
@@ -551,7 +576,8 @@ Each of these is documented at the call site as well as in the README.
 - Files written by ferroxl are opened with openpyxl 3.x and the values, styles, merges,
   validations, comments, defined names and freeze panes compared.
 
-[Unreleased]: https://github.com/SV-stark/ferroxl/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/SV-stark/ferroxl/compare/v0.1.9...HEAD
+[0.1.9]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.9
 [0.1.8]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.8
 [0.1.7]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.7
 [0.1.6]: https://github.com/SV-stark/ferroxl/releases/tag/v0.1.6

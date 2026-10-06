@@ -15,7 +15,7 @@ exposes it to AI agents is published separately as `ferroxl-mcp`.
 
 ```toml
 [dependencies]
-ferroxl = "0.1.8"
+ferroxl = "0.1.9"
 ```
 
 Rust 1.88 or newer, which is what `rust-version` in the manifest declares and what CI

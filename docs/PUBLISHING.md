@@ -2,7 +2,7 @@
 
 `ferroxl` and `ferroxl-mcp` are published from CI, in that order. Both are on crates.io
 now; [ferroxl](https://crates.io/crates/ferroxl) and
-[ferroxl-mcp](https://crates.io/crates/ferroxl-mcp), 0.1.5 through 0.1.8.
+[ferroxl-mcp](https://crates.io/crates/ferroxl-mcp), 0.1.5 through 0.1.9.
 
 `release.yml` and `publish.yml` are separate on purpose. The tag builds the binaries; the
 published *release* publishes the crates. A failed cross-compile must not put a crate on

@@ -61,7 +61,7 @@ crates/
 
 ```toml
 [dependencies]
-ferroxl = "0.1.8"
+ferroxl = "0.1.9"
 ```
 
 Both crates are on crates.io — the [library](https://crates.io/crates/ferroxl) and the
@@ -132,7 +132,7 @@ read and edit workbooks instead of guessing at them.
 
 ```console
 $ cargo run -p ferroxl-mcp -- --help
-ferroxl-mcp 0.1.8 — a Model Context Protocol server for Excel workbooks
+ferroxl-mcp 0.1.9 — a Model Context Protocol server for Excel workbooks
 
 USAGE:
     ferroxl-mcp [--root <directory>]
@@ -575,7 +575,7 @@ Three workflows under `.github/workflows`.
 The dependency cache is shared across the matrix, so the first job to finish warms it for
 the rest.
 
-**`release.yml`** runs when a tag of the form `v0.1.8` is pushed. It builds `ferroxl-mcp`
+**`release.yml`** runs when a tag of the form `v0.1.9` is pushed. It builds `ferroxl-mcp`
 for five targets:
 
 | Target | Archive |
@@ -600,7 +600,7 @@ library by version, so publishing both at once fails in a way that reads like a 
 number is wrong rather than a race. See [docs/PUBLISHING.md](docs/PUBLISHING.md).
 
 ```console
-$ git tag v0.1.8 && git push origin v0.1.8
+$ git tag v0.1.9 && git push origin v0.1.9
 ```
 
 ## License

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/ferroxl", "crates/ferroxl-mcp"]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -14,7 +14,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # The version here is the requirement `ferroxl-mcp` publishes against, not a copy of the
 # crate's own version. It has to name a version that exists on crates.io, so it is bumped by
 # hand -- `version.workspace` does not apply to dependencies.
-ferroxl = { path = "crates/ferroxl", version = "0.1.8" }
+ferroxl = { path = "crates/ferroxl", version = "0.1.9" }
 png = "0.18"
 # `encoding` provides the Decoder that quick-xml's attribute API requires; ferroxl reads
 # UTF-8 XML but the type is still needed at the call site.
